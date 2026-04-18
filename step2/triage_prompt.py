@@ -1,15 +1,18 @@
 """Prompt template for content triage agent."""
 
+from constants import SLIDE_BUDGET, MANDATORY_SLIDES, MAX_CHART_SLIDES
+
 TRIAGE_PROMPT_TEMPLATE = """You are an expert presentation strategist. Create a slide plan from the content inventory below.
 
 PRESENTATION REQUIREMENTS:
 - Total slides: {slide_budget}
 - Mandatory slides: Title (1), Agenda (1), Executive Summary (1), Conclusion/Thank You (1)
 - Content slides available: {content_budget}
-- Max chart slides: 5 (select only the most data-rich tables)
+- Max chart slides: {max_chart_slides} (select only the most data-rich tables)
 - Max bullets per slide: 6 items, max 8 words each
 - Title length: max 50 characters
 - Key message: 1 sentence summarizing the slide's main point
+- NO images — this presentation uses text, charts, and tables only
 
 CONTENT INVENTORY:
 {inventory_json}
@@ -28,10 +31,10 @@ DECISION RULES - FOLLOW STRICTLY:
    - Merge: small adjacent TEXT sections, related topics
    - Skip: TOC, References, Appendix (already filtered in inventory)
 
-3. CHART SELECTION (max 5):
+3. CHART SELECTION (max {max_chart_slides}):
    - Select tables with has_numeric=true
+   - Use the recommended_chart_type from inventory when available
    - Prioritize: temporal data > comparisons > rankings > simple values
-   - Match chart type to data structure
 
 4. LAYOUT SELECTION:
    - Title slide: COVER
@@ -52,7 +55,6 @@ DECISION RULES - FOLLOW STRICTLY:
 6. CONTENT TYPE RULES:
    - DATA sections → chart slides (if table selected) or table slides
    - TABLE sections → table slides
-   - VISUAL sections → image slides or mixed
    - LIST sections → bullet slides
    - TEXT sections → bullet slides
 
@@ -64,16 +66,15 @@ Return a valid JSON object matching the PresentationPlan schema with:
 - slides: array of SlidePlan objects
 - sections_used: count of unique section IDs used
 - charts_planned: count of chart slides
-- images_planned: count of image slides
 - merge_reasoning: map explaining why sections were merged
 
 Example slide plan structure:
-{{
-  "slide_budget": 15,
-  "total_slides": 15,
+{{{{
+  "slide_budget": {slide_budget},
+  "total_slides": {slide_budget},
   "title": "Example Presentation",
   "slides": [
-    {{
+    {{{{
       "slide_number": 1,
       "type": "title",
       "layout": "cover",
@@ -82,8 +83,8 @@ Example slide plan structure:
       "key_message": "Overview of key findings",
       "content_type": "bullet",
       "bullet_points": []
-    }},
-    {{
+    }}}},
+    {{{{
       "slide_number": 3,
       "type": "summary",
       "layout": "bullet",
@@ -91,9 +92,9 @@ Example slide plan structure:
       "source_sections": ["exec_summary"],
       "key_message": "Revenue increased 25% driven by AI adoption",
       "content_type": "bullet",
-      "bullet_points": ["25% revenue growth", "15% market share", "92% customer satisfaction"]
-    }},
-    {{
+      "bullet_points": ["25% revenue growth", "15% market share", "92% satisfaction"]
+    }}}},
+    {{{{
       "slide_number": 7,
       "type": "content",
       "layout": "chart_with_text",
@@ -101,39 +102,32 @@ Example slide plan structure:
       "source_sections": ["sec_5"],
       "key_message": "Market growing at 15% CAGR through 2025",
       "content_type": "chart",
-      "chart_config": {{
+      "chart_config": {{{{
         "chart_type": "line",
         "table_index": 12,
         "title": "Annual Market Growth"
-      }},
+      }}}},
       "bullet_points": ["2022: $100M", "2023: $115M", "2024: $132M"]
-    }}
+    }}}}
   ]
-}}
+}}}}
 
 IMPORTANT:
 - All section IDs from inventory must appear in at least one slide's source_sections
 - Each DATA section with numeric table should ideally become a chart slide
-- Do not exceed 5 chart slides total
+- Do not exceed {max_chart_slides} chart slides total
 - Merge sections when needed to fit budget, but explain merges
 - Ensure slide_number is sequential from 1 to total_slides
 """
 
 
-def build_triage_prompt(inventory_json: str, slide_budget: int = 15) -> str:
-    """Build the triage prompt with inventory data.
-    
-    Args:
-        inventory_json: JSON string of ContentInventory
-        slide_budget: Target number of slides
-        
-    Returns:
-        Formatted prompt string
-    """
-    content_budget = slide_budget - 4  # Title, Agenda, Summary, Thank You
-    
+def build_triage_prompt(inventory_json: str, slide_budget: int = SLIDE_BUDGET) -> str:
+    """Build the triage prompt with inventory data."""
+    content_budget = slide_budget - MANDATORY_SLIDES
+
     return TRIAGE_PROMPT_TEMPLATE.format(
         slide_budget=slide_budget,
         content_budget=content_budget,
-        inventory_json=inventory_json
+        max_chart_slides=MAX_CHART_SLIDES,
+        inventory_json=inventory_json,
     )

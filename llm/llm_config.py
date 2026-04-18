@@ -13,7 +13,7 @@ class LLMConfig:
     api_key: str
     temperature: float = 0.3
     max_output_tokens: Optional[int] = None
-    extra_params: Dict[str, Any] = None
+    extra_params: Optional[Dict[str, Any]] = None
 
 
 class LLMConfigLoader:
