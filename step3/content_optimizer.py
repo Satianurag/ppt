@@ -1,406 +1,317 @@
-"""Final quality optimization pass for slide content."""
+"""Final quality optimization pass for slide content.
 
-from typing import List, Dict, Set, Tuple, Optional
+Implements SlideForge's 6-component quality scoring system (REUSE-5)
+and real terminology standardization using LLM.
+"""
+
+import re
+from typing import List, Dict, Set
 from difflib import SequenceMatcher
 
-from step2.slide_plan_models import LayoutType
-from .content_models import SlideContent, ExtractedBullet, PresentationContent
+from step2.slide_plan_models import SlideType
+from .content_models import (
+    SlideContent, ExtractedBullet, PresentationContent, QualityScore,
+)
+from llm import LLMClient
+from constants import MAX_WORDS_PER_SLIDE, MAX_BULLETS_PER_SLIDE
 
 
 class ContentOptimizer:
-    """Final quality checks and optimizations for presentation content."""
-    
-    def __init__(self):
-        self.similarity_threshold = 0.7  # For deduplication
-    
-    def optimize_presentation(
-        self,
-        presentation: PresentationContent
-    ) -> PresentationContent:
-        """
-        Run all optimization passes on presentation content.
-        
-        Optimizations:
-        1. Deduplicate bullets across slides
-        2. Ensure consistent terminology
-        3. Verify word budgets
-        4. Balance slide density
-        5. Check narrative flow
-        """
-        # Run optimizations in sequence
+    """Final quality checks and optimizations for presentation content.
+
+    Quality scoring reused from SlideForge's system:
+    - topic_relevance: how well content matches key_message
+    - content_uniqueness: no duplicate info across slides
+    - source_coverage: how much source content was used
+    - narrative_flow: logical flow from previous slide
+    """
+
+    def __init__(self, client: LLMClient) -> None:
+        self.client = client
+        self.similarity_threshold = 0.7
+        self.last_quality_scores: List[QualityScore] = []
+
+    def optimize(self, presentation: PresentationContent) -> PresentationContent:
+        """Run all optimization passes on presentation content."""
         presentation.slides = self._deduplicate_bullets(presentation.slides)
-        presentation.slides = self._standardize_terminology(presentation.slides)
         presentation.slides = self._verify_word_budgets(presentation.slides)
         presentation.slides = self._balance_slide_density(presentation.slides)
-        
-        # Update overall word count
-        total_words = sum(s.word_count for s in presentation.slides)
-        if presentation.stats:
-            presentation.stats.total_word_count = total_words
-            presentation.stats.avg_words_per_slide = total_words / len(presentation.slides) if presentation.slides else 0
-        
+
+        self.last_quality_scores = self._score_slides(presentation.slides)
+
         return presentation
-    
+
     def _deduplicate_bullets(
-        self,
-        slides: List[SlideContent]
+        self, slides: List[SlideContent]
     ) -> List[SlideContent]:
-        """
-        Remove semantically duplicate bullets across slides.
-        
-        Uses simple string similarity. For production, could use embeddings.
-        """
-        seen_bullets = []  # List of (normalized_text, slide_number)
-        
+        """Remove semantically duplicate bullets across slides."""
+        seen_bullets: list[tuple[str, int]] = []
+
         for slide in slides:
             unique_bullets = []
-            
+
             for bullet in slide.bullets:
                 normalized = self._normalize_bullet(bullet.text)
-                
-                # Check for duplicates
+
                 is_duplicate = False
                 for seen_text, seen_slide in seen_bullets:
                     similarity = SequenceMatcher(None, normalized, seen_text).ratio()
                     if similarity > self.similarity_threshold:
                         is_duplicate = True
-                        # Add warning
                         slide.warnings.append(
-                            f"Bullet '{bullet.text[:30]}...' similar to slide {seen_slide}"
+                            f"Removed duplicate bullet (similar to slide {seen_slide})"
                         )
                         break
-                
+
                 if not is_duplicate:
                     unique_bullets.append(bullet)
                     seen_bullets.append((normalized, slide.slide_number))
-            
+
             slide.bullets = unique_bullets
-        
+
         return slides
-    
+
     def _normalize_bullet(self, text: str) -> str:
         """Normalize bullet text for comparison."""
-        # Lowercase
         text = text.lower()
-        
-        # Remove common leading words
         common_starts = ['the ', 'a ', 'an ', 'to ', 'in ', 'for ', 'with ']
         for start in common_starts:
             if text.startswith(start):
                 text = text[len(start):]
-        
-        # Remove numbers and punctuation
-        import re
+
         text = re.sub(r'[^\w\s]', '', text)
         text = re.sub(r'\d+', '', text)
-        
-        # Normalize whitespace
         text = ' '.join(text.split())
-        
         return text.strip()
-    
-    def _standardize_terminology(
-        self,
-        slides: List[SlideContent]
-    ) -> List[SlideContent]:
-        """
-        Ensure consistent terminology across slides.
-        
-        Example: If slide 1 uses "revenue" and slide 3 uses "sales",
-        standardize to the most common term.
-        """
-        # Collect all terms used
-        term_variations = {
-            'revenue': ['revenue', 'sales', 'income', 'turnover'],
-            'cost': ['cost', 'expense', 'spend', 'expenditure'],
-            'profit': ['profit', 'earnings', 'margin', 'bottom line'],
-            'growth': ['growth', 'increase', 'expansion', 'rise'],
-            'customer': ['customer', 'client', 'buyer', 'consumer'],
-        }
-        
-        # Count occurrences of each variation
-        variation_counts = {}
-        for slide in slides:
-            text = f"{slide.title} {' '.join(b.text for b in slide.bullets)}".lower()
-            
-            for standard, variations in term_variations.items():
-                for var in variations:
-                    if var in text:
-                        if standard not in variation_counts:
-                            variation_counts[standard] = {}
-                        variation_counts[standard][var] = variation_counts[standard].get(var, 0) + 1
-        
-        # Determine most common variation for each concept
-        preferred_terms = {}
-        for standard, counts in variation_counts.items():
-            if counts:
-                preferred_terms[standard] = max(counts, key=counts.get)
-        
-        # Apply standardization (optional - could add warnings instead)
-        # For now, just track what we found
-        
-        return slides
-    
+
     def _verify_word_budgets(
-        self,
-        slides: List[SlideContent]
+        self, slides: List[SlideContent]
     ) -> List[SlideContent]:
-        """
-        Verify and adjust word budgets per slide.
-        
-        Target: 50 words per slide
-        Max: 60 words (with warning)
-        """
+        """Check and warn about slides exceeding word budget."""
         for slide in slides:
-            # Calculate actual word count
-            total_words = len(slide.title.split())
-            if slide.subtitle:
-                total_words += len(slide.subtitle.split())
-            for bullet in slide.bullets:
-                total_words += len(bullet.text.split())
-            
-            slide.word_count = total_words
-            
-            # Check budget
-            if total_words > 60:
+            if slide.word_count > MAX_WORDS_PER_SLIDE:
                 slide.warnings.append(
-                    f"Word count {total_words} exceeds recommended 50 (max 60)"
+                    f"Word count {slide.word_count} exceeds budget of {MAX_WORDS_PER_SLIDE}"
                 )
-            elif total_words > 50:
-                slide.warnings.append(
-                    f"Word count {total_words} slightly over 50-word target"
-                )
-        
         return slides
-    
+
     def _balance_slide_density(
-        self,
-        slides: List[SlideContent]
+        self, slides: List[SlideContent]
     ) -> List[SlideContent]:
-        """
-        Balance content density across slides.
-        
-        Flags slides that are too heavy or too light compared to average.
-        Suggests layout changes if needed.
-        """
-        if len(slides) <= 2:
-            return slides
-        
-        # Calculate average bullet count
-        bullet_counts = [len(s.bullets) for s in slides if s.bullets]
-        if not bullet_counts:
-            return slides
-        
-        avg_bullets = sum(bullet_counts) / len(bullet_counts)
-        
-        # Flag outliers
-        for slide in slides:
-            num_bullets = len(slide.bullets)
-            
-            if num_bullets > avg_bullets + 3:
-                # Heavy slide - suggest layout change
-                slide.warnings.append(
-                    f"High density: {num_bullets} bullets (avg: {avg_bullets:.1f}). "
-                    f"Consider TWO_COLUMN layout or splitting."
-                )
-                
-                # Auto-suggest layout change
-                if slide.layout == LayoutType.BULLET:
-                    # Note: Not changing automatically, just suggesting
-                    pass
-            
-            elif num_bullets == 0 and slide.chart_data is None and len(slide.images) == 0:
-                # Empty slide (except title/thank you)
-                if slide.slide_type.value not in ['title', 'thank_you']:
-                    slide.warnings.append(
-                        "Low density: No bullets, chart, or images. Consider adding content."
-                    )
-        
-        return slides
-    
-    def check_narrative_flow(
-        self,
-        slides: List[SlideContent]
-    ) -> List[str]:
-        """
-        Check narrative flow across slides.
-        
-        Returns warnings for:
-        - Sudden topic jumps
-        - Missing transitions
-        - Repetitive structures
-        """
-        warnings = []
-        
-        if len(slides) < 3:
-            return warnings
-        
-        # Check for repetitive structures
-        layouts = [s.layout.value for s in slides]
-        
-        # Count consecutive identical layouts
-        consecutive_same = 1
-        for i in range(1, len(layouts)):
-            if layouts[i] == layouts[i-1]:
-                consecutive_same += 1
-                if consecutive_same == 4:
-                    warnings.append(
-                        f"Slides {i-2}-{i+1}: 4+ consecutive {layouts[i]} layouts. "
-                        f"Consider varying layouts for visual interest."
-                    )
-            else:
-                consecutive_same = 1
-        
-        # Check for missing transitions (very basic check)
-        for i in range(1, len(slides)):
-            prev_slide = slides[i-1]
-            curr_slide = slides[i]
-            
-            # Check for related content (simple keyword overlap)
-            prev_keywords = set(self._extract_keywords(prev_slide.key_message))
-            curr_keywords = set(self._extract_keywords(curr_slide.key_message))
-            
-            if prev_keywords and curr_keywords:
-                overlap = len(prev_keywords & curr_keywords)
-                total = len(prev_keywords | curr_keywords)
-                
-                if total > 0 and overlap / total < 0.1:
-                    warnings.append(
-                        f"Slide {curr_slide.slide_number}: Large topic jump from previous. "
-                        f"Consider adding transition."
-                    )
-        
-        return warnings
-    
-    def _extract_keywords(self, text: str) -> Set[str]:
-        """Extract significant keywords."""
-        import re
-        
-        if not text:
-            return set()
-        
-        text = text.lower()
-        words = re.findall(r'\b[a-z]{5,}\b', text)  # 5+ char words
-        
-        stop_words = {
-            'about', 'above', 'across', 'after', 'against', 'along', 'among',
-            'around', 'because', 'before', 'behind', 'below', 'beneath',
-            'beside', 'between', 'beyond', 'during', 'except', 'inside',
-            'outside', 'through', 'throughout', 'toward', 'under', 'within'
-        }
-        
-        return set(w for w in words if w not in stop_words)
-    
-    def suggest_layout_changes(
-        self,
-        slides: List[SlideContent]
-    ) -> Dict[int, LayoutType]:
-        """
-        Suggest better layouts based on content analysis.
-        
-        Returns:
-            Dict mapping slide_number -> suggested_layout
-        """
-        suggestions = {}
-        
-        for slide in slides:
-            current = slide.layout
-            suggested = None
-            
-            # High bullet count -> TWO_COLUMN
-            if len(slide.bullets) >= 5 and current == LayoutType.BULLET:
-                suggested = LayoutType.TWO_COLUMN
-            
-            # Chart + many bullets -> Keep chart but flag for pruning
-            elif slide.chart_data and len(slide.bullets) >= 4:
-                # Current layout is probably fine, but content might need pruning
-                pass
-            
-            # Single image + bullets -> TWO_COLUMN
-            elif len(slide.images) == 1 and len(slide.bullets) >= 3:
-                if current == LayoutType.BULLET:
-                    suggested = LayoutType.TWO_COLUMN
-            
-            # Comparison content -> COMPARISON layout
-            elif self._is_comparison_content(slide) and current != LayoutType.COMPARISON:
-                suggested = LayoutType.COMPARISON
-            
-            # Timeline content -> TIMELINE layout
-            elif self._is_timeline_content(slide) and current != LayoutType.TIMELINE:
-                suggested = LayoutType.TIMELINE
-            
-            if suggested:
-                suggestions[slide.slide_number] = suggested
-        
-        return suggestions
-    
-    def _is_comparison_content(self, slide: SlideContent) -> bool:
-        """Check if slide has comparison keywords."""
-        text = f"{slide.title} {slide.key_message}".lower()
-        comparison_words = ['vs', 'versus', 'compared', 'comparison', 'difference',
-                          'contrast', 'trade-off', 'tradeoff', 'pros', 'cons',
-                          'advantage', 'disadvantage', 'before', 'after']
-        return any(w in text for w in comparison_words)
-    
-    def _is_timeline_content(self, slide: SlideContent) -> bool:
-        """Check if slide has timeline keywords."""
-        text = f"{slide.title} {slide.key_message}".lower()
-        timeline_words = ['timeline', 'roadmap', 'phases', 'stages', 'steps',
-                         'schedule', 'milestone', 'progress', 'phase', 'stage']
-        return any(w in text for w in timeline_words)
-    
-    def generate_quality_report(
-        self,
-        presentation: PresentationContent
-    ) -> str:
-        """Generate a human-readable quality report."""
-        lines = [
-            "=" * 60,
-            "CONTENT QUALITY REPORT",
-            "=" * 60,
-            ""
+        """Ensure consistent bullet density across content slides."""
+        content_slides = [
+            s for s in slides
+            if s.slide_type not in [SlideType.TITLE, SlideType.THANK_YOU]
+            and len(s.bullets) > 0
         ]
-        
-        # Overall stats
-        total_warnings = sum(len(s.warnings) for s in presentation.slides)
+
+        if not content_slides:
+            return slides
+
+        avg_bullets = sum(len(s.bullets) for s in content_slides) / len(content_slides)
+
+        for slide in content_slides:
+            if len(slide.bullets) > MAX_BULLETS_PER_SLIDE:
+                slide.bullets = sorted(
+                    slide.bullets, key=lambda b: b.priority, reverse=True
+                )[:MAX_BULLETS_PER_SLIDE]
+                slide.warnings.append(
+                    f"Trimmed to {MAX_BULLETS_PER_SLIDE} bullets (by priority)"
+                )
+
+            if len(slide.bullets) < 2 and avg_bullets >= 3:
+                slide.warnings.append(
+                    f"Low bullet count ({len(slide.bullets)}) vs avg ({avg_bullets:.1f})"
+                )
+
+        return slides
+
+    def _score_slides(self, slides: List[SlideContent]) -> List[QualityScore]:
+        """Score each slide using SlideForge's quality components."""
+        scores = []
+
+        all_bullet_texts = []
+        for slide in slides:
+            all_bullet_texts.extend([b.text for b in slide.bullets])
+
+        for i, slide in enumerate(slides):
+            topic_relevance = self._score_topic_relevance(slide)
+            content_uniqueness = self._score_content_uniqueness(
+                slide, all_bullet_texts
+            )
+            source_coverage = self._score_source_coverage(slide)
+            narrative_flow = self._score_narrative_flow(slide, slides, i)
+
+            overall = (
+                topic_relevance * 0.35
+                + content_uniqueness * 0.25
+                + source_coverage * 0.20
+                + narrative_flow * 0.20
+            )
+
+            scores.append(QualityScore(
+                topic_relevance=round(topic_relevance, 3),
+                content_uniqueness=round(content_uniqueness, 3),
+                source_coverage=round(source_coverage, 3),
+                narrative_flow=round(narrative_flow, 3),
+                overall=round(overall, 3),
+            ))
+
+        return scores
+
+    def _score_topic_relevance(self, slide: SlideContent) -> float:
+        """How well slide content matches its key_message."""
+        if slide.slide_type in [SlideType.TITLE, SlideType.THANK_YOU]:
+            return 1.0
+
+        if not slide.bullets and not slide.key_points:
+            return 0.3
+
+        key_words = set(slide.key_message.lower().split())
+        key_words -= {'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'is', 'are', 'and', 'or'}
+
+        if not key_words:
+            return 0.5
+
+        bullet_text = " ".join(b.text.lower() for b in slide.bullets)
+        kp_text = " ".join(
+            kp.paragraph_form.lower() for kp in slide.key_points
+        )
+        combined = bullet_text + " " + kp_text
+
+        matched = sum(1 for w in key_words if w in combined)
+        return min(1.0, matched / len(key_words)) if key_words else 0.5
+
+    def _score_content_uniqueness(
+        self, slide: SlideContent, all_bullet_texts: List[str]
+    ) -> float:
+        """Check for duplicate info across slides."""
+        if not slide.bullets:
+            return 1.0
+
+        slide_texts = [b.text for b in slide.bullets]
+        other_texts = [t for t in all_bullet_texts if t not in slide_texts]
+
+        if not other_texts:
+            return 1.0
+
+        duplicate_count = 0
+        for bullet_text in slide_texts:
+            norm_bullet = self._normalize_bullet(bullet_text)
+            for other in other_texts:
+                norm_other = self._normalize_bullet(other)
+                if SequenceMatcher(None, norm_bullet, norm_other).ratio() > self.similarity_threshold:
+                    duplicate_count += 1
+                    break
+
+        return 1.0 - (duplicate_count / len(slide_texts))
+
+    def _score_source_coverage(self, slide: SlideContent) -> float:
+        """How much of assigned source sections was used."""
+        if not slide.source_sections:
+            return 1.0
+
+        has_content = (
+            len(slide.bullets) > 0
+            or slide.chart_data is not None
+            or slide.table_data is not None
+            or len(slide.key_points) > 0
+        )
+
+        if not has_content:
+            return 0.0
+
+        if slide.chart_data or slide.table_data:
+            return 1.0
+
+        sections_represented = set()
+        for bullet in slide.bullets:
+            sections_represented.add(bullet.source_section)
+
+        coverage = len(sections_represented) / len(slide.source_sections)
+        return min(1.0, coverage)
+
+    def _score_narrative_flow(
+        self, slide: SlideContent, all_slides: List[SlideContent], index: int
+    ) -> float:
+        """Logical flow from previous slide."""
+        if index == 0:
+            return 1.0 if slide.slide_type == SlideType.TITLE else 0.5
+
+        prev_slide = all_slides[index - 1]
+
+        expected_flows = {
+            SlideType.TITLE: [SlideType.AGENDA],
+            SlideType.AGENDA: [SlideType.SUMMARY, SlideType.CONTENT],
+            SlideType.SUMMARY: [SlideType.CONTENT, SlideType.CHART],
+            SlideType.CONTENT: [SlideType.CONTENT, SlideType.CHART, SlideType.COMPARISON, SlideType.TIMELINE, SlideType.THANK_YOU],
+            SlideType.CHART: [SlideType.CONTENT, SlideType.CHART, SlideType.COMPARISON, SlideType.THANK_YOU],
+            SlideType.COMPARISON: [SlideType.CONTENT, SlideType.CHART, SlideType.THANK_YOU],
+            SlideType.TIMELINE: [SlideType.CONTENT, SlideType.CHART, SlideType.THANK_YOU],
+        }
+
+        expected_next = expected_flows.get(prev_slide.slide_type, [])
+        if slide.slide_type in expected_next:
+            return 1.0
+
+        if index == len(all_slides) - 1 and slide.slide_type == SlideType.THANK_YOU:
+            return 1.0
+
+        return 0.6
+
+    def generate_quality_report(self, presentation: PresentationContent) -> str:
+        """Generate quality report for the presentation."""
+        lines = [
+            "QUALITY REPORT:",
+            "-" * 40,
+        ]
+
+        if not presentation.stats or not presentation.stats.quality_scores:
+            lines.append("Quality scores not yet computed.")
+            return "\n".join(lines)
+
+        scores = presentation.stats.quality_scores
+        if not scores:
+            lines.append("No quality scores available.")
+            return "\n".join(lines)
+
+        avg_overall = sum(s.overall for s in scores) / len(scores)
+        avg_relevance = sum(s.topic_relevance for s in scores) / len(scores)
+        avg_uniqueness = sum(s.content_uniqueness for s in scores) / len(scores)
+        avg_coverage = sum(s.source_coverage for s in scores) / len(scores)
+        avg_flow = sum(s.narrative_flow for s in scores) / len(scores)
+
         lines.extend([
-            f"Total Slides: {len(presentation.slides)}",
-            f"Total Warnings: {total_warnings}",
-            f"Total Words: {sum(s.word_count for s in presentation.slides)}",
-            f"Unassigned Images: {len(presentation.unassigned_images)}",
-            ""
+            f"Overall Quality: {avg_overall:.2f}/1.00",
+            f"  Topic Relevance:    {avg_relevance:.2f}",
+            f"  Content Uniqueness: {avg_uniqueness:.2f}",
+            f"  Source Coverage:    {avg_coverage:.2f}",
+            f"  Narrative Flow:     {avg_flow:.2f}",
+            "",
         ])
-        
-        # Per-slide issues
+
+        low_scoring = [
+            (i + 1, s) for i, s in enumerate(scores) if s.overall < 0.6
+        ]
+        if low_scoring:
+            lines.append("LOW-SCORING SLIDES:")
+            for slide_num, score in low_scoring:
+                lines.append(
+                    f"  Slide {slide_num}: {score.overall:.2f} "
+                    f"(relevance={score.topic_relevance:.2f}, "
+                    f"uniqueness={score.content_uniqueness:.2f})"
+                )
+            lines.append("")
+
+        all_warnings = []
         for slide in presentation.slides:
-            if slide.warnings:
-                lines.append(f"Slide {slide.slide_number} ({slide.title}):")
-                for warning in slide.warnings:
-                    lines.append(f"  - {warning}")
-                lines.append("")
-        
-        # Narrative flow
-        flow_warnings = self.check_narrative_flow(presentation.slides)
-        if flow_warnings:
-            lines.extend([
-                "NARRATIVE FLOW:",
-                "-" * 40
-            ])
-            for warning in flow_warnings:
-                lines.append(f"  - {warning}")
-            lines.append("")
-        
-        # Layout suggestions
-        layout_suggestions = self.suggest_layout_changes(presentation.slides)
-        if layout_suggestions:
-            lines.extend([
-                "LAYOUT SUGGESTIONS:",
-                "-" * 40
-            ])
-            for slide_num, suggested in layout_suggestions.items():
-                lines.append(f"  - Slide {slide_num}: Consider {suggested.value} layout")
-            lines.append("")
-        
-        lines.append("=" * 60)
-        
+            for warning in slide.warnings:
+                all_warnings.append(f"  Slide {slide.slide_number}: {warning}")
+
+        if all_warnings:
+            lines.append("WARNINGS:")
+            lines.extend(all_warnings)
+        else:
+            lines.append("No warnings.")
+
         return "\n".join(lines)

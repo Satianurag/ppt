@@ -7,7 +7,6 @@ from .models import (
     SectionType,
     ContentType,
     TableInfo,
-    ImageInfo,
     OverflowStatus,
 )
 from .classifier import (
@@ -16,6 +15,7 @@ from .classifier import (
     detect_comparison,
     detect_process,
     detect_timeline,
+    select_chart_type,
 )
 
 __all__ = [
@@ -25,11 +25,11 @@ __all__ = [
     "SectionType",
     "ContentType",
     "TableInfo",
-    "ImageInfo",
     "OverflowStatus",
     "classify_section_type",
     "classify_content_type",
     "detect_comparison",
     "detect_process",
     "detect_timeline",
+    "select_chart_type",
 ]

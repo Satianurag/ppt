@@ -1,18 +1,27 @@
-"""LLM-powered bullet point generation and content transformation."""
+"""LLM-powered bullet point generation and content transformation.
 
+Reuses patterns from:
+- PPTAgent content_organizer.yaml: dual-format output (paragraph + bullet)
+- PPTAgent presentation/layout.py LENGTHY_REWRITE_PROMPT: LLM compression
+  instead of truncation when content exceeds character limits
+- PPTAgent editor.yaml: suggested_characters enforcement
+"""
+
+import re
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
-from .content_models import ExtractedBullet
+from .content_models import ExtractedBullet, KeyPoint
 from .markdown_reparser import SectionContent
-from llm import get_llm_client, LLMClient, StructuredLLMClient
+from llm import LLMClient, StructuredLLMClient
+from constants import MAX_BULLETS_PER_SLIDE, MAX_WORDS_PER_BULLET, MAX_BULLET_CHARS
 
 
 class BulletRewriteOutput(BaseModel):
     """Structured output for bullet rewriting."""
     bullets: List[str] = Field(
-        max_length=6,
-        description="Bullet points (max 6, max 8 words each)"
+        max_length=MAX_BULLETS_PER_SLIDE,
+        description="Bullet points"
     )
     priorities: List[int] = Field(
         description="Importance score 1-10 for each bullet"
@@ -25,7 +34,7 @@ class BulletRewriteOutput(BaseModel):
 class MergedSectionOutput(BaseModel):
     """Structured output for merged section synthesis."""
     bullets: List[str] = Field(
-        max_length=6,
+        max_length=MAX_BULLETS_PER_SLIDE,
         description="Synthesized bullets from multiple sections"
     )
     priorities: List[int] = Field(
@@ -36,51 +45,51 @@ class MergedSectionOutput(BaseModel):
     )
 
 
+class KeyPointsOutput(BaseModel):
+    """Structured output for dual-format content organization.
+
+    Reused from PPTAgent content_organizer.yaml structure.
+    """
+    key_points: List[KeyPoint] = Field(
+        description="Key points in dual format (paragraph + bullet)"
+    )
+
+
 class BulletRewriter:
     """LLM-powered bullet point generation with quality optimization."""
-    
-    def __init__(self, client: Optional[LLMClient] = None):
-        """Initialize the bullet rewriter with LLM client."""
+
+    def __init__(self, client: LLMClient) -> None:
+        """Initialize the bullet rewriter with LLM client.
+
+        Args:
+            client: LLMClient instance (required, no fallback).
+        """
         self.client = client
-        
-        # Create structured clients if LLM available
-        if self.client:
-            self.bullet_client = self.client.with_structured_output(BulletRewriteOutput)
-            self.merge_client = self.client.with_structured_output(MergedSectionOutput)
-        else:
-            self.bullet_client = None
-            self.merge_client = None
-    
+        self.bullet_client: StructuredLLMClient = client.with_structured_output(BulletRewriteOutput)
+        self.merge_client: StructuredLLMClient = client.with_structured_output(MergedSectionOutput)
+        self.key_points_client: StructuredLLMClient = client.with_structured_output(KeyPointsOutput)
+
     def rewrite_bullets(
         self,
         source_text: str,
         key_message: str,
         section_id: str,
-        max_bullets: int = 6,
-        max_words_per_bullet: int = 8,
-        target_audience: str = "executive"
+        max_bullets: int = MAX_BULLETS_PER_SLIDE,
+        max_words_per_bullet: int = MAX_WORDS_PER_BULLET,
+        target_audience: str = "executive",
     ) -> List[ExtractedBullet]:
-        """
-        Transform source text into optimized bullets using LLM.
-        Falls back to rule-based if no LLM client.
-        """
-        # Fallback to rule-based if no client
-        if not self.client or not self.bullet_client:
-            return self._fallback_rewrite(
-                source_text, key_message, section_id, max_bullets, max_words_per_bullet
-            )
-        
+        """Transform source text into optimized bullets using LLM."""
         prompt = f"""Transform the following content into high-impact presentation bullets.
 
 SOURCE CONTENT:
-{source_text[:4000]}  # Truncate if too long
+{source_text[:4000]}
 
 KEY MESSAGE (what this slide must convey):
 {key_message}
 
 REQUIREMENTS:
 - Generate {max_bullets} bullets maximum
-- Each bullet: {max_words_per_bullet} words maximum
+- Each bullet: {max_words_per_bullet} words maximum, {MAX_BULLET_CHARS} characters maximum
 - Use powerful action verbs (Drive, Accelerate, Reduce, Increase, etc.)
 - Parallel structure (all start with verb or all noun phrases)
 - Quantify where possible (%, $, numbers)
@@ -96,66 +105,46 @@ Return JSON with:
 - rationales: array of strings (why this bullet matters)
 
 Make every word count. Be concise and impactful."""
-        
-        try:
-            result = self.bullet_client.invoke(prompt)
-            
-            # Convert to ExtractedBullet objects
-            extracted = []
-            for i, (text, priority, rationale) in enumerate(
-                zip(result.bullets, result.priorities, result.rationales)
-            ):
-                # Truncate if too long
-                words = text.split()
-                if len(words) > max_words_per_bullet:
-                    text = ' '.join(words[:max_words_per_bullet])
-                
-                extracted.append(ExtractedBullet(
-                    text=text,
-                    priority=priority,
-                    source_section=section_id,
-                    rationale=rationale
-                ))
-            
-            return extracted[:max_bullets]
-            
-        except Exception:
-            # Fallback to rule-based extraction
-            return self._fallback_rewrite(
-                source_text, key_message, section_id, max_bullets, max_words_per_bullet
-            )
-    
+
+        result = self.bullet_client.invoke_with_retry(prompt, max_retries=3)
+
+        extracted = []
+        for i, (text, priority, rationale) in enumerate(
+            zip(result.bullets, result.priorities, result.rationales)
+        ):
+            # LLM compression instead of truncation (PPTAgent length_rewrite pattern)
+            text = self._compress_if_overlong(text, MAX_BULLET_CHARS)
+
+            extracted.append(ExtractedBullet(
+                text=text,
+                priority=priority,
+                source_section=section_id,
+                rationale=rationale,
+            ))
+
+        return extracted[:max_bullets]
+
     def rewrite_merged_sections(
         self,
         sections: List[SectionContent],
         key_message: str,
         merge_reasoning: str,
-        max_bullets: int = 6,
-        max_words_per_bullet: int = 8
+        max_bullets: int = MAX_BULLETS_PER_SLIDE,
+        max_words_per_bullet: int = MAX_WORDS_PER_BULLET,
     ) -> List[ExtractedBullet]:
-        """
-        Synthesize multiple sections into coherent bullets.
-        Falls back to rule-based if no LLM client.
-        """
-        # Fallback to rule-based if no client
-        if not self.client or not self.merge_client:
-            return self._fallback_merge(
-                sections, key_message, max_bullets, max_words_per_bullet
-            )
-        
-        # Build combined context
+        """Synthesize multiple sections into coherent bullets."""
         sections_context = []
         source_section_ids = []
-        
+
         for i, section in enumerate(sections):
             sections_context.append(
                 f"SECTION {i+1}: {section.heading}\n"
                 f"Content: {section.get_all_text()[:800]}\n"
             )
             source_section_ids.append(section.section_id)
-        
+
         combined_context = "\n---\n".join(sections_context)
-        
+
         prompt = f"""Synthesize multiple content sections into a coherent slide.
 
 SECTIONS TO MERGE:
@@ -169,7 +158,7 @@ KEY MESSAGE (unified takeaway):
 
 REQUIREMENTS:
 - Create {max_bullets} unified bullets
-- Each bullet: {max_words_per_bullet} words max
+- Each bullet: {max_words_per_bullet} words max, {MAX_BULLET_CHARS} characters max
 - Synthesize across sections (don't just list section summaries)
 - Find common themes and connections
 - Tell a cohesive story
@@ -183,52 +172,66 @@ Return JSON with:
 - merge_strategy: brief description of synthesis approach
 
 Create a unified narrative, not a list of section summaries."""
-        
-        try:
-            result = self.merge_client.invoke(prompt)
-            
-            # Convert to ExtractedBullet
-            extracted = []
-            section_source = "_".join(source_section_ids[:3])  # Truncated combined ID
-            
-            for text, priority in zip(result.bullets, result.priorities):
-                words = text.split()
-                if len(words) > max_words_per_bullet:
-                    text = ' '.join(words[:max_words_per_bullet])
-                
-                extracted.append(ExtractedBullet(
-                    text=text,
-                    priority=priority,
-                    source_section=section_source,
-                    rationale=result.merge_strategy
-                ))
-            
-            return extracted[:max_bullets]
-            
-        except Exception:
-            # Fallback: concatenate best bullets from each section
-            return self._fallback_merge(
-                sections, key_message, max_bullets, max_words_per_bullet
-            )
-    
+
+        result = self.merge_client.invoke_with_retry(prompt, max_retries=3)
+
+        extracted = []
+        section_source = "_".join(source_section_ids[:3])
+
+        for text, priority in zip(result.bullets, result.priorities):
+            text = self._compress_if_overlong(text, MAX_BULLET_CHARS)
+
+            extracted.append(ExtractedBullet(
+                text=text,
+                priority=priority,
+                source_section=section_source,
+                rationale=result.merge_strategy,
+            ))
+
+        return extracted[:max_bullets]
+
+    def extract_key_points(
+        self,
+        source_text: str,
+        key_message: str,
+    ) -> List[KeyPoint]:
+        """Extract dual-format key points (paragraph + bullet).
+
+        Reused from PPTAgent content_organizer.yaml — each key point
+        is expressed in both paragraph form and bullet form.
+        """
+        prompt = f"""Extract key points from the given content source.
+Distill essential information, ensure all critical points are extracted.
+
+Output Requirements:
+Key Points Extraction
+  - Extract all key points from the input content.
+  - Express each extracted key point in two formats:
+    a) Paragraph form: Fewer but longer paragraphs, 1-3 items, ~30 words each.
+    b) Bullet form: More but shorter bullet points, 3-8 items, ~10 words each.
+  - If no content is provided, leave the key points an empty list.
+
+Input:
+{source_text[:4000]}
+
+Key Message: {key_message}
+
+Output: give your output in JSON format."""
+
+        result = self.key_points_client.invoke_with_retry(prompt, max_retries=3)
+        return result.key_points
+
     def polish_bullets(
         self,
         bullets: List[str],
-        key_message: str
+        key_message: str,
     ) -> List[str]:
-        """
-        Final polish pass for consistency and impact.
-        
-        Ensures:
-        - Parallel structure
-        - Active voice
-        - Consistent terminology
-        """
-        if len(bullets) <= 1 or not self.client:
+        """Final polish pass for consistency and impact."""
+        if len(bullets) <= 1:
             return bullets
-        
+
         bullets_text = "\n".join([f"{i+1}. {b}" for i, b in enumerate(bullets)])
-        
+
         prompt = f"""Polish these bullets for maximum impact and consistency.
 
 CURRENT BULLETS:
@@ -242,97 +245,45 @@ POLISH REQUIREMENTS:
 2. Use active voice throughout
 3. Remove redundant words
 4. Standardize terminology
-5. Maintain 8 words maximum per bullet
-6. Keep the meaning identical, just improve wording
+5. Maintain {MAX_WORDS_PER_BULLET} words maximum per bullet
+6. Each bullet must not exceed {MAX_BULLET_CHARS} characters
+7. Keep the meaning identical, just improve wording
 
 OUTPUT:
 Return only the polished bullets, one per line, numbered."""
-        
-        try:
-            response_text = self.client.invoke(prompt)
-            
-            # Parse response
-            polished = []
-            for line in response_text.strip().split('\n'):
-                # Remove numbering if present
-                line = re.sub(r'^\d+\.\s*', '', line.strip())
-                if line:
-                    polished.append(line)
-            
-            return polished if polished else bullets
-            
-        except Exception:
-            return bullets
-    
-    def _fallback_rewrite(
-        self,
-        source_text: str,
-        key_message: str,
-        section_id: str,
-        max_bullets: int,
-        max_words: int
-    ) -> List[ExtractedBullet]:
-        """Fallback rule-based bullet extraction."""
-        import re
-        
-        # Extract sentences
-        sentences = re.split(r'[.!?]+', source_text)
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
-        
-        bullets = []
-        for i, sentence in enumerate(sentences[:max_bullets]):
-            words = sentence.split()
-            if len(words) > max_words:
-                text = ' '.join(words[:max_words])
-            else:
-                text = sentence
-            
-            bullets.append(ExtractedBullet(
-                text=text,
-                priority=10 - i,  # Descending priority
-                source_section=section_id,
-                rationale="Fallback extraction"
-            ))
-        
-        return bullets
-    
-    def _fallback_merge(
-        self,
-        sections: List[SectionContent],
-        key_message: str,
-        max_bullets: int,
-        max_words: int
-    ) -> List[ExtractedBullet]:
-        """Fallback for merged sections: pick best from each."""
-        all_bullets = []
-        
-        for section in sections:
-            # Get first sentence of each paragraph
-            for para in section.paragraphs[:2]:
-                import re
-                sentences = re.split(r'[.!?]+', para)
-                for sent in sentences[:1]:
-                    sent = sent.strip()
-                    if len(sent) > 20:
-                        words = sent.split()
-                        if len(words) > max_words:
-                            sent = ' '.join(words[:max_words])
-                        all_bullets.append((sent, section.section_id))
-        
-        # Take top bullets by source diversity
-        selected = []
-        seen_sources = set()
-        
-        for text, source in all_bullets:
-            if len(selected) >= max_bullets:
-                break
-            if source not in seen_sources or len(seen_sources) >= len(sections):
-                selected.append(ExtractedBullet(
-                    text=text,
-                    priority=10 - len(selected),
-                    source_section=source,
-                    rationale="Fallback merged extraction"
-                ))
-                seen_sources.add(source)
-        
-        return selected
+
+        response_text = self.client.invoke_with_retry(prompt, max_retries=2)
+
+        polished = []
+        for line in response_text.strip().split('\n'):
+            line = re.sub(r'^\d+\.\s*', '', line.strip())
+            if line:
+                polished.append(line)
+
+        return polished if polished else bullets
+
+    def _compress_if_overlong(self, text: str, max_chars: int) -> str:
+        """LLM compression instead of truncation (PPTAgent length_rewrite pattern).
+
+        Reused from PPTAgent presentation/layout.py LENGTHY_REWRITE_PROMPT:
+        when content exceeds suggested_characters, use LLM to compress
+        rather than blindly truncating.
+        """
+        if len(text) <= max_chars:
+            return text
+
+        prompt = (
+            f"Rewrite the following text to be concise and suitable for a "
+            f"presentation slide. It must not exceed {max_chars} characters. "
+            f"Preserve the original meaning. Do not invent new abbreviations.\n\n"
+            f"Text: {text}\n\n"
+            f"Rewritten (max {max_chars} characters):"
+        )
+
+        compressed = self.client.invoke(prompt)
+        compressed = compressed.strip().strip('"').strip("'")
+
+        if len(compressed) <= max_chars and compressed:
+            return compressed
+
+        return text[:max_chars]

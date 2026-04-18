@@ -1,21 +1,28 @@
-"""Pydantic models for extracted slide content."""
+"""Pydantic models for extracted slide content.
 
-from enum import Enum
+Includes dual-format content (paragraph + bullet) reused from PPTAgent's
+content_organizer.yaml pattern, and table font sizing heuristic from SlidesAI.
+"""
+
 from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 from step2.slide_plan_models import SlideType, LayoutType, ChartType
-from step1.models import ImageInfo
+from constants import (
+    SLIDE_BUDGET, MAX_BULLETS_PER_SLIDE,
+    MAX_TITLE_CHARS, MAX_SUBTITLE_CHARS, MAX_KEY_MESSAGE_CHARS, MAX_BULLET_CHARS,
+    MAX_WORDS_PER_SLIDE,
+)
 
 
 class ExtractedBullet(BaseModel):
     """A single bullet point extracted for a slide."""
-    
+
     model_config = ConfigDict(strict=True)
-    
+
     text: str = Field(
-        max_length=60,
-        description="Bullet text (max ~60 chars for 8 words)"
+        max_length=MAX_BULLET_CHARS,
+        description="Bullet text"
     )
     priority: int = Field(
         ge=1,
@@ -31,50 +38,57 @@ class ExtractedBullet(BaseModel):
     )
 
 
+class KeyPoint(BaseModel):
+    """Dual-format key point reused from PPTAgent content_organizer.yaml.
+
+    Each key point is expressed in both paragraph form and bullet form,
+    matching PPTAgent's content_organizer output structure.
+    """
+
+    point_name: str = Field(description="Name/topic of this key point")
+    paragraph_form: str = Field(
+        description="Paragraph form: 1-3 longer items, ~30 words each"
+    )
+    bullet_form: List[str] = Field(
+        description="Bullet form: 3-8 shorter items, ~10 words each"
+    )
+
+
 class ChartData(BaseModel):
     """Structured chart data ready for python-pptx ChartData conversion."""
-    
+
     model_config = ConfigDict(strict=True)
-    
+
     chart_type: ChartType = Field(description="Type of chart")
-    title: str = Field(max_length=50, description="Chart title")
+    title: str = Field(max_length=MAX_TITLE_CHARS, description="Chart title")
     source_table_index: int = Field(ge=0, description="Index of source table in markdown")
-    
-    # Data structure
-    categories: List[str] = Field(
-        description="X-axis category labels"
-    )
+
+    categories: List[str] = Field(description="X-axis category labels")
     series: List[Dict[str, Any]] = Field(
         description="Series data: [{name: str, values: List[float]}]"
     )
-    
-    # Formatting hints for Step 4
+
     number_format: str = Field(
         default="General",
         description="Number format string (e.g., '$#,##0.0M', '0.0%')"
     )
     show_legend: bool = Field(default=True)
     show_data_labels: bool = Field(default=False)
-    
-    # Validation metadata
-    is_valid: bool = Field(
-        default=True,
-        description="Whether data passed validation for chart type"
-    )
-    validation_errors: List[str] = Field(
-        default_factory=list,
-        description="Any validation warnings"
-    )
+
+    is_valid: bool = Field(default=True, description="Whether data passed validation")
+    validation_errors: List[str] = Field(default_factory=list)
 
 
 class TableData(BaseModel):
-    """Non-chart table data for table slides."""
-    
+    """Non-chart table data for table slides.
+
+    Includes font sizing heuristic from SlidesAI (REUSE-7).
+    """
+
     headers: List[str] = Field(description="Column headers")
     rows: List[List[str]] = Field(description="Table rows (as strings)")
     source_table_index: int = Field(ge=0)
-    
-    # Styling hints
+
     has_numeric_columns: List[int] = Field(
         default_factory=list,
         description="Which columns have numeric data (for right-align)"
@@ -82,163 +96,145 @@ class TableData(BaseModel):
     zebra_stripes: bool = Field(default=True)
     bold_headers: bool = Field(default=True)
 
+    # Font sizing heuristic (REUSE-7: SlidesAI pattern)
+    recommended_font_size: int = Field(
+        default=12,
+        description="Recommended font size based on table dimensions"
+    )
 
-class SlideImage(BaseModel):
-    """Image assigned to a slide with positioning info."""
-    
-    image_info: ImageInfo = Field(description="Image metadata from inventory")
-    position: Literal["left", "right", "full", "background", "inline"] = Field(
-        default="inline",
-        description="Suggested position on slide"
-    )
-    caption: Optional[str] = Field(default=None, max_length=100)
-    fit_score: float = Field(
-        ge=0.0,
-        le=1.0,
-        description="How well this image fits the slide content (0-1)"
-    )
+    def model_post_init(self, __context: Any) -> None:
+        """Calculate recommended font size based on table dimensions."""
+        num_rows = len(self.rows)
+        num_cols = len(self.headers)
+        max_cell_len = 0
+        for row in self.rows:
+            for cell in row:
+                max_cell_len = max(max_cell_len, len(str(cell)))
+
+        if num_rows <= 4 and num_cols <= 4:
+            self.recommended_font_size = 14
+        elif num_rows <= 8 and num_cols <= 6:
+            self.recommended_font_size = 12
+        elif num_rows <= 12 or num_cols <= 8:
+            self.recommended_font_size = 10
+        else:
+            self.recommended_font_size = 8
+
+        if max_cell_len > 30:
+            self.recommended_font_size = min(self.recommended_font_size, 10)
 
 
 class SlideContent(BaseModel):
     """Complete content for a single slide."""
-    
+
     model_config = ConfigDict(strict=True)
-    
-    # Identity
-    slide_number: int = Field(ge=1, le=15)
+
+    slide_number: int = Field(ge=1, le=SLIDE_BUDGET)
     slide_type: SlideType
     layout: LayoutType
-    
-    # Text content
-    title: str = Field(max_length=50)
-    subtitle: Optional[str] = Field(default=None, max_length=80)
-    key_message: str = Field(max_length=100)
-    
-    # Bullet content
+
+    title: str = Field(max_length=MAX_TITLE_CHARS)
+    subtitle: Optional[str] = Field(default=None, max_length=MAX_SUBTITLE_CHARS)
+    key_message: str = Field(max_length=MAX_KEY_MESSAGE_CHARS)
+
+    # Dual-format content (REUSE-2: PPTAgent content_organizer pattern)
+    key_points: List[KeyPoint] = Field(
+        default_factory=list,
+        description="Dual-format key points (paragraph + bullet)"
+    )
     bullets: List[ExtractedBullet] = Field(
         default_factory=list,
-        max_length=6,
-        description="Bullet points (max 6)"
+        max_length=MAX_BULLETS_PER_SLIDE,
     )
-    
-    # Visual content
+
     chart_data: Optional[ChartData] = Field(default=None)
     table_data: Optional[TableData] = Field(default=None)
-    images: List[SlideImage] = Field(
-        default_factory=list,
-        max_length=2,
-        description="Assigned images (max 2)"
-    )
-    
-    # Source tracking
-    source_sections: List[str] = Field(
-        default_factory=list,
-        description="Section IDs that contributed to this slide"
-    )
-    word_count: int = Field(
-        default=0,
-        ge=0,
-        description="Total word count for this slide"
-    )
-    
-    # Metadata
-    extraction_method: Literal["llm", "rule_based", "hybrid"] = Field(
-        default="rule_based",
+
+    source_sections: List[str] = Field(default_factory=list)
+    word_count: int = Field(default=0, ge=0)
+
+    extraction_method: Literal["llm", "hybrid"] = Field(
+        default="llm",
         description="How content was extracted"
     )
     confidence_score: float = Field(
-        default=1.0,
-        ge=0.0,
-        le=1.0,
-        description="Confidence in extraction quality"
+        default=1.0, ge=0.0, le=1.0,
     )
-    warnings: List[str] = Field(
-        default_factory=list,
-        description="Any extraction warnings"
-    )
+    warnings: List[str] = Field(default_factory=list)
+
+
+class QualityScore(BaseModel):
+    """Quality scoring per slide, reused from SlideForge's 6-component system."""
+
+    topic_relevance: float = Field(ge=0.0, le=1.0, description="How well content matches key_message")
+    content_uniqueness: float = Field(ge=0.0, le=1.0, description="No duplicate info across slides")
+    source_coverage: float = Field(ge=0.0, le=1.0, description="How much source content was used")
+    narrative_flow: float = Field(ge=0.0, le=1.0, description="Logical flow from previous slide")
+    overall: float = Field(ge=0.0, le=1.0, description="Weighted average")
 
 
 class ExtractionStats(BaseModel):
     """Statistics about the extraction process."""
-    
+
     total_slides: int
     slides_with_llm: int
-    slides_rule_based: int
     charts_extracted: int
     tables_extracted: int
-    images_assigned: int
-    images_unassigned: int
     total_word_count: int
     avg_words_per_slide: float
     llm_api_calls: int
     llm_tokens_used: int
     extraction_time_seconds: float
-    warnings: List[str]
+    quality_scores: Optional[List[QualityScore]] = Field(default=None)
+    warnings: List[str] = Field(default_factory=list)
 
 
 class PresentationContent(BaseModel):
     """Complete extracted content for a presentation."""
-    
+
     model_config = ConfigDict(strict=True)
-    
-    # Metadata
+
     title: str
-    total_slides: int = Field(ge=10, le=15)
-    
-    # Main content
-    slides: List[SlideContent] = Field(
-        description="Ordered list of slide content"
-    )
-    
-    # Reference data for Step 4
-    charts: List[ChartData] = Field(
-        default_factory=list,
-        description="All chart data for reference"
-    )
-    unassigned_images: List[ImageInfo] = Field(
-        default_factory=list,
-        description="Images not assigned to any slide"
-    )
-    
-    # Stats
+    total_slides: int = Field(ge=10, le=SLIDE_BUDGET)
+
+    slides: List[SlideContent] = Field(description="Ordered list of slide content")
+    charts: List[ChartData] = Field(default_factory=list)
+
     stats: Optional[ExtractionStats] = Field(default=None)
-    
+
     def get_slide(self, number: int) -> Optional[SlideContent]:
         """Get slide content by slide number."""
         for slide in self.slides:
             if slide.slide_number == number:
                 return slide
         return None
-    
+
     def get_chart_slides(self) -> List[SlideContent]:
         """Get all slides with chart data."""
         return [s for s in self.slides if s.chart_data is not None]
-    
-    def get_image_slides(self) -> List[SlideContent]:
-        """Get all slides with images."""
-        return [s for s in self.slides if len(s.images) > 0]
-    
+
     def validate_completeness(self) -> List[str]:
         """Validate that all planned content was extracted."""
         issues = []
-        
+
         for slide in self.slides:
-            # Check content exists
             has_bullets = len(slide.bullets) > 0
             has_chart = slide.chart_data is not None
             has_table = slide.table_data is not None
-            has_images = len(slide.images) > 0
-            
-            if not any([has_bullets, has_chart, has_table, has_images]):
+            has_key_points = len(slide.key_points) > 0
+
+            if not any([has_bullets, has_chart, has_table, has_key_points]):
                 if slide.slide_type not in [SlideType.TITLE, SlideType.THANK_YOU]:
                     issues.append(f"Slide {slide.slide_number}: No content extracted")
-            
-            # Check word budget
-            if slide.word_count > 60:  # Allow slight overrun from 50
-                issues.append(f"Slide {slide.slide_number}: Word count {slide.word_count} exceeds budget")
-            
-            # Check bullet constraints
-            if len(slide.bullets) > 6:
-                issues.append(f"Slide {slide.slide_number}: Too many bullets ({len(slide.bullets)})")
-        
+
+            if slide.word_count > MAX_WORDS_PER_SLIDE:
+                issues.append(
+                    f"Slide {slide.slide_number}: Word count {slide.word_count} exceeds budget"
+                )
+
+            if len(slide.bullets) > MAX_BULLETS_PER_SLIDE:
+                issues.append(
+                    f"Slide {slide.slide_number}: Too many bullets ({len(slide.bullets)})"
+                )
+
         return issues
