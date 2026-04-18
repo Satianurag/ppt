@@ -1,6 +1,6 @@
 """Main entry point for the markdown-to-presentation pipeline.
 
-Steps 1-3: Parse → Triage → Extract slide-ready content.
+Steps 1-4: Parse → Triage → Extract → Render PPTX.
 All LLM calls use retry-with-feedback (PPTAgent pattern).
 No image handling. No fallback code.
 """
@@ -12,14 +12,26 @@ from pathlib import Path
 from step1 import MarkdownParser
 from step2 import ContentTriageAgent
 from step3 import ContentExtractor
+from step3.content_models import PresentationContent
+from step4 import build_presentation
 from llm import get_llm_client
 
 
 def process_markdown_to_presentation(
     markdown_path: str,
+    template_path: str | None = None,
     output_dir: str = "./output",
-) -> "PresentationContent":
-    """Process a markdown file through all 3 steps to create slide-ready content."""
+) -> tuple[PresentationContent, str | None]:
+    """Process a markdown file through all 4 steps to create a PPTX.
+
+    Args:
+        markdown_path: Path to input markdown file.
+        template_path: Path to Slide Master PPTX template. If None, skips Step 4.
+        output_dir: Directory for output files.
+
+    Returns:
+        Tuple of (PresentationContent, pptx_path or None).
+    """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -57,14 +69,24 @@ def process_markdown_to_presentation(
     report_path.write_text(report, encoding='utf-8')
     print(f"\n  Report saved to: {report_path}")
 
-    return presentation
+    # Step 4: Render PPTX (pure code, no LLM calls)
+    pptx_path = None
+    if template_path is not None:
+        print("\n[Step 4] Rendering PPTX...")
+        md_stem = Path(markdown_path).stem
+        pptx_file = str(output_path / f"{md_stem}.pptx")
+        pptx_path, issues = build_presentation(presentation, template_path, pptx_file)
+    else:
+        print("\n[Step 4] Skipped — no template provided.")
+
+    return presentation, pptx_path
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python main.py <markdown_file>")
+        print("Usage: python main.py <markdown_file> [template.pptx]")
         print("\nExample:")
-        print("  python main.py research/example.md")
+        print("  python main.py research/example.md template.pptx")
         sys.exit(1)
 
     api_key = os.getenv("LLM_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -73,13 +95,16 @@ if __name__ == "__main__":
         sys.exit(1)
 
     markdown_file = sys.argv[1]
-    result = process_markdown_to_presentation(markdown_file)
+    template_file = sys.argv[2] if len(sys.argv) > 2 else None
+    result, pptx_path = process_markdown_to_presentation(markdown_file, template_file)
 
     print("\n" + "=" * 60)
     print("PIPELINE COMPLETE")
     print("=" * 60)
     print(f"Presentation: {result.title}")
     print(f"Slides: {len(result.slides)}")
+    if pptx_path:
+        print(f"PPTX: {pptx_path}")
 
     issues = result.validate_completeness()
     if issues:
