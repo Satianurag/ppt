@@ -65,11 +65,29 @@ def _add_textbox(
     bold: bool = False,
     alignment: PP_ALIGN = PP_ALIGN.LEFT,
     color: RGBColor | None = None,
+    has_fill: bool = False,
 ) -> None:
-    """Add a text box shape to a slide. Never sets font.name (GAP-11: let theme cascade)."""
+    """Add a text box shape to a slide. Never sets font.name (GAP-11: let theme cascade).
+
+    Fill-conditional margins per judge feedback (Common Mistakes PPTX):
+    "There should be no margins within text boxes which does not have any fill color."
+    Text boxes without fill get zero internal margins; filled boxes get padding.
+    """
     txBox = slide.shapes.add_textbox(left, top, width, height)
     tf = txBox.text_frame
     tf.word_wrap = True
+
+    if has_fill:
+        tf.margin_left = Inches(0.1)
+        tf.margin_right = Inches(0.1)
+        tf.margin_top = Inches(0.05)
+        tf.margin_bottom = Inches(0.05)
+    else:
+        tf.margin_left = 0
+        tf.margin_right = 0
+        tf.margin_top = 0
+        tf.margin_bottom = 0
+
     p = tf.paragraphs[0]
     p.text = text
     p.font.size = font_size
