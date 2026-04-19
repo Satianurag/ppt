@@ -188,10 +188,19 @@ class MarkdownReparser:
         if table_head:
             head_children = table_head.get('children', [])
             if head_children:
-                header_cells = [
-                    self._get_text_content(cell)
-                    for cell in head_children[0].get('children', [])
-                ]
+                # mistune 3.x: table_head children are table_cell directly
+                # (no wrapping table_row like table_body has)
+                if head_children[0].get('type') == 'table_cell':
+                    header_cells = [
+                        self._get_text_content(cell)
+                        for cell in head_children
+                    ]
+                else:
+                    # Fallback for older mistune: children[0] is a row
+                    header_cells = [
+                        self._get_text_content(cell)
+                        for cell in head_children[0].get('children', [])
+                    ]
                 rows.append(header_cells)
 
         if table_body:
