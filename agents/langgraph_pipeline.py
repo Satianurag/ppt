@@ -70,11 +70,18 @@ def executor_node(state: GraphState) -> GraphState:
 
 
 def reviewer_node(state: GraphState) -> GraphState:
-    """Score quality and decide pass/retry."""
+    """Score quality and decide pass/retry. Increments retry_count here so the
+    change is returned via node output (LangGraph does not propagate mutations
+    made inside a conditional-edge decision function)."""
     ps = state["pipeline"]
     _reviewer.threshold = state["quality_threshold"]
     ps = _reviewer.process(ps)
-    return {"pipeline": ps, "retry_count": state["retry_count"],
+
+    new_retry_count = state["retry_count"]
+    if not ps.review_passed and new_retry_count < state["max_retries"]:
+        new_retry_count += 1
+        ps.total_retries = new_retry_count
+    return {"pipeline": ps, "retry_count": new_retry_count,
             "max_retries": state["max_retries"],
             "quality_threshold": state["quality_threshold"]}
 
@@ -82,15 +89,16 @@ def reviewer_node(state: GraphState) -> GraphState:
 # ── Conditional edge: retry or finish ────────────────────────────────
 
 def should_retry(state: GraphState) -> str:
-    """Decide whether to retry (back to designer) or finish."""
+    """Decide whether to retry (back to designer) or finish.
+
+    Pure function — retry_count is incremented inside reviewer_node so the
+    change propagates through the graph.
+    """
     ps = state["pipeline"]
     if ps.review_passed:
         return "end"
     if state["retry_count"] >= state["max_retries"]:
         return "end"
-    # Increment retry count for next iteration
-    state["retry_count"] = state["retry_count"] + 1
-    ps.total_retries = state["retry_count"]
     return "retry"
 
 

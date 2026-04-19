@@ -4,6 +4,7 @@ Rate limiting is handled solely by LLMClient (no duplicate tracking).
 Retry uses PPTAgent's feedback pattern via StructuredLLMClient.invoke_with_retry().
 """
 
+from difflib import SequenceMatcher
 from typing import Optional
 
 from step1.models import ContentInventory
@@ -42,12 +43,29 @@ class ContentTriageAgent:
     ) -> PresentationPlan:
         """Validate LLM output and apply post-processing."""
         valid_section_ids = {s.id for s in inventory.sections}
+        id_to_title = {s.id: (s.heading or s.id).lower() for s in inventory.sections}
+
         for slide in plan.slides:
+            remapped: list[str] = []
             for section_id in slide.source_sections:
-                if section_id and section_id not in valid_section_ids:
-                    raise ValueError(
-                        f"Slide {slide.slide_number} references unknown section: {section_id}"
-                    )
+                if not section_id:
+                    continue
+                if section_id in valid_section_ids:
+                    remapped.append(section_id)
+                    continue
+                # Fuzzy remap: nearest section by id or title similarity.
+                # Robustness fix — the LLM occasionally invents a section id
+                # (e.g. 'exec_summary') that does not exist in the inventory.
+                # Dropping the plan is worse than remapping to the closest match.
+                candidates = [(sid, SequenceMatcher(None, section_id.lower(),
+                                                      f"{sid} {title}".lower()).ratio())
+                              for sid, title in id_to_title.items()]
+                if candidates:
+                    best_id, _ = max(candidates, key=lambda x: x[1])
+                    remapped.append(best_id)
+            # Preserve order but de-duplicate
+            seen = set()
+            slide.source_sections = [s for s in remapped if not (s in seen or seen.add(s))]
 
         data_table_indices = {
             t.index for s in inventory.sections

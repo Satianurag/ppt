@@ -2,9 +2,30 @@
 
 from enum import Enum
 from typing import List, Optional, Dict, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from constants import SLIDE_BUDGET, MAX_BULLETS_PER_SLIDE, TARGET_WORDS_PER_SLIDE
+
+
+# Content-type aliases the LLM occasionally emits outside of the strict Literal.
+# Keeping the strict Literal for downstream dispatch, but coercing at the edge
+# avoids a full-pipeline crash on a single hallucinated token (robustness fix
+# for AI Bubble which emitted 'title_only' and hard-crashed the previous run).
+_CONTENT_TYPE_ALIASES: dict[str, str] = {
+    "title_only": "bullet",
+    "text": "bullet",
+    "bullets": "bullet",
+    "list": "bullet",
+    "kpi": "infographic",
+    "timeline": "infographic",
+    "comparison": "infographic",
+    "process": "infographic",
+    "table_data": "table",
+    "data": "chart",
+    "graph": "chart",
+    "": "bullet",
+    None: "bullet",
+}
 
 
 class SlideType(str, Enum):
@@ -68,6 +89,18 @@ class SlidePlan(BaseModel):
     content_type: Literal["bullet", "chart", "table", "infographic", "mixed"] = Field(
         description="Primary content type"
     )
+
+    @field_validator("content_type", mode="before")
+    @classmethod
+    def _coerce_content_type(cls, v):
+        """Coerce common LLM variants into the canonical set."""
+        if v in ("bullet", "chart", "table", "infographic", "mixed"):
+            return v
+        if isinstance(v, str):
+            key = v.strip().lower()
+            if key in _CONTENT_TYPE_ALIASES:
+                return _CONTENT_TYPE_ALIASES[key]
+        return "mixed"
     chart_config: Optional[ChartConfig] = Field(
         default=None,
         description="Chart configuration if content_type is 'chart'"
@@ -78,7 +111,7 @@ class SlidePlan(BaseModel):
         description="Bullet items for slide"
     )
     max_bullets: int = Field(
-        default=MAX_BULLETS_PER_SLIDE, ge=1, le=8,
+        default=MAX_BULLETS_PER_SLIDE, ge=1, le=MAX_BULLETS_PER_SLIDE,
         description="Maximum bullet capacity"
     )
     word_budget: int = Field(
