@@ -229,9 +229,15 @@ def _add_speaker_notes(prs, slide_content: SlideContent) -> None:
         notes_parts.append(slide_content.key_message)
     if slide_content.title and slide_content.title not in (slide_content.key_message or ""):
         notes_parts.append(f"Slide: {slide_content.title}")
-    if notes_parts:
+    if not notes_parts:
+        return
+    try:
         notes_slide = slide.notes_slide
-        notes_slide.notes_text_frame.text = "\n".join(notes_parts)
+        tf = notes_slide.notes_text_frame
+        if tf is not None:
+            tf.text = "\n".join(notes_parts)
+    except Exception:
+        pass
 
 
 def _render_slide(

@@ -142,32 +142,45 @@ def render_comparison_columns(slide, grid, items: list[dict], template_type=None
     """Render side-by-side comparison columns.
 
     Items: [{"title": str, "points": [str, ...]}, ...]
+    Cap at 4 columns to prevent overflow; use aggressive font sizing.
     """
     n = len(items)
     if n == 0:
         return
 
-    col_gap = Inches(0.2)
+    MAX_COLS = 4
+    if n > MAX_COLS:
+        items = items[:MAX_COLS]
+        n = MAX_COLS
+
+    col_gap = Inches(0.15)
     total_gap = int(col_gap * (n - 1))
     col_width = int((grid.content_width - total_gap) / n)
-    col_height = grid.content_height
+
+    header_font = Pt(14) if n >= 4 else Pt(16)
+    sizing_ctx = "tight_col" if n >= 3 else "two_col"
 
     for i, item in enumerate(items):
         left = grid.content_left + int(i * (col_width + col_gap))
         top = grid.content_top
 
-        # Column header
+        title = item.get("title", f"Option {i+1}")
+        if len(title) > 25:
+            title = title[:22] + "..."
+
         _add_shaped_textbox(
             slide, left, top, col_width, Inches(0.6),
-            item.get("title", f"Option {i+1}"),
-            Pt(16), bold=True,
+            title,
+            header_font, bold=True,
             accent_index=i, use_white_text=True,
         )
 
-        # Column body with points
         points = item.get("points", [])
+        if n >= 4 and len(points) > 3:
+            points = points[:3]
+
         body_text = "\n".join(f"• {p}" for p in points)
-        font_sz = auto_font_size_pt(body_text, "two_col")
+        font_sz = auto_font_size_pt(body_text, sizing_ctx)
 
         body = slide.shapes.add_shape(
             MSO_SHAPE.ROUNDED_RECTANGLE,
@@ -182,7 +195,7 @@ def render_comparison_columns(slide, grid, items: list[dict], template_type=None
             p = tf.paragraphs[0] if j == 0 else tf.add_paragraph()
             p.text = f"• {point}"
             p.font.size = font_sz
-            p.space_after = Pt(6)
+            p.space_after = Pt(4)
 
 
 # ── Pros/Cons ────────────────────────────────────────────────────────
