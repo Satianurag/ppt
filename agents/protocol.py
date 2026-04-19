@@ -4,10 +4,17 @@ Inspired by PPTAgent's Turn-based conversation + PPT Master's role separation.
 Each agent sends/receives AgentMessage objects with typed payloads.
 """
 
+from __future__ import annotations
+
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+
+if TYPE_CHECKING:
+    from step1.models import ContentInventory
+    from step2.slide_plan_models import PresentationPlan
+    from step3.content_models import PresentationContent
 
 
 class AgentRole(str, Enum):
@@ -39,7 +46,7 @@ class AgentMessage:
     receiver: AgentRole
     msg_type: MessageType
     payload: Any
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     turn_id: int = 0
     retry_count: int = 0
 
@@ -68,11 +75,11 @@ class PipelineState:
     output_dir: str = "./output"
 
     # Step 1 output (Strategist)
-    inventory: Any = None
-    slide_plan: Any = None
+    inventory: ContentInventory | None = None
+    slide_plan: PresentationPlan | None = None
 
     # Step 2 output (Designer)
-    presentation_content: Any = None
+    presentation_content: PresentationContent | None = None
 
     # Step 3 output (Executor)
     pptx_path: str | None = None

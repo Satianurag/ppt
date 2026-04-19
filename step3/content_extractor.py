@@ -47,9 +47,17 @@ class ContentExtractor:
         presentation_plan: PresentationPlan,
         markdown_text: str,
         inventory: ContentInventory,
+        feedback_context: str = "",
     ) -> PresentationContent:
-        """Main extraction method."""
+        """Main extraction method.
+
+        Args:
+            feedback_context: Reviewer feedback from a previous attempt (PPTAgent
+                retry-with-feedback pattern). Passed to LLM prompts so the model
+                can correct issues identified in the prior run.
+        """
         self.stats['start_time'] = time.time()
+        self.feedback_context = feedback_context
 
         sections_content = self.reparser.reparse_sections(markdown_text, inventory)
         ast_tokens = inventory.get_ast_tokens()
@@ -74,6 +82,12 @@ class ContentExtractor:
 
             if slide_content.chart_data:
                 all_charts.append(slide_content.chart_data)
+
+        # Fix 10: Enforce chart type diversity — prevent duplicate chart types
+        self._enforce_chart_diversity(slides)
+
+        # Rebuild chart list after diversity pass
+        all_charts = [s.chart_data for s in slides if s.chart_data]
 
         presentation = PresentationContent(
             title=presentation_plan.title,
@@ -153,15 +167,9 @@ class ContentExtractor:
                     source_sections, slide_plan.key_message, merge_reasoning,
                 )
                 slide_content.bullets = bullets
-
-                # Also extract dual-format key points (PPTAgent content_organizer)
-                combined_text = "\n".join(s.get_all_text() for s in source_sections)
-                if combined_text.strip():
-                    key_points = self.bullet_rewriter.extract_key_points(
-                        combined_text, slide_plan.key_message,
-                    )
-                    slide_content.key_points = key_points
-                    self.stats['llm_calls'] += 1
+                # Fix 8: Removed redundant extract_key_points() call.
+                # Bullets already contain the same content — the extra LLM call
+                # duplicated work and wasted ~1 API call per bullet slide.
 
         if slide_plan.type in [SlideType.TITLE, SlideType.THANK_YOU]:
             slide_content.confidence_score = 1.0
@@ -170,6 +178,48 @@ class ContentExtractor:
         slide_content.word_count = self._calculate_word_count(slide_content)
 
         return slide_content
+
+    # ── Chart diversity (Fix 10) ─────────────────────────────────────
+
+    # Narrative priority: temporal trends first, then comparisons, then rankings
+    _CHART_PRIORITY = {
+        "LINE": 1,       # temporal trends — highest priority
+        "BAR": 2,        # comparisons
+        "HORIZONTAL_BAR": 2,
+        "GROUPED_BAR": 3,
+        "PIE": 4,        # proportions
+        "DONUT": 4,
+    }
+
+    def _enforce_chart_diversity(self, slides: List[SlideContent]) -> None:
+        """Prevent duplicate chart types and reorder by narrative priority.
+
+        If two slides have the same chart type, the second one gets its
+        chart_type swapped to an unused alternative (BAR↔HORIZONTAL_BAR,
+        PIE↔DONUT, etc.).
+        """
+        from step2.slide_plan_models import ChartType
+
+        seen_types: set[str] = set()
+        swap_map = {
+            ChartType.BAR: ChartType.HORIZONTAL_BAR,
+            ChartType.HORIZONTAL_BAR: ChartType.BAR,
+            ChartType.PIE: ChartType.DONUT,
+            ChartType.DONUT: ChartType.PIE,
+            ChartType.GROUPED_BAR: ChartType.BAR,
+        }
+
+        for slide in slides:
+            if slide.chart_data is None:
+                continue
+            ct = slide.chart_data.chart_type
+            ct_name = ct.value if hasattr(ct, 'value') else str(ct)
+            if ct_name in seen_types:
+                alt = swap_map.get(ct)
+                if alt and alt.value not in seen_types:
+                    slide.chart_data.chart_type = alt
+                    ct_name = alt.value
+            seen_types.add(ct_name)
 
     def _extract_chart_content(
         self,
@@ -254,6 +304,8 @@ class ContentExtractor:
                     merge_reason = merge_reasoning[key]
                     break
 
+        feedback = getattr(self, "feedback_context", "")
+
         if len(source_sections) == 1:
             section = source_sections[0]
             source_text = section.get_all_text()
@@ -262,6 +314,7 @@ class ContentExtractor:
                 source_text=source_text,
                 key_message=key_message,
                 section_id=section.section_id,
+                feedback_context=feedback,
             )
             self.stats['llm_calls'] += 1
             return bullets
@@ -271,6 +324,7 @@ class ContentExtractor:
                 sections=source_sections,
                 key_message=key_message,
                 merge_reasoning=merge_reason or "Multiple sections combined",
+                feedback_context=feedback,
             )
             self.stats['llm_calls'] += 1
             return bullets

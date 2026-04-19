@@ -32,6 +32,277 @@ SLIDEFORGE_WEIGHTS: dict[str, float] = {
 TOTAL_WEIGHT = sum(SLIDEFORGE_WEIGHTS.values())
 
 
+def score_presentation(presentation: PresentationContent) -> tuple[float, List[QualityScore], str]:
+    """Standalone scoring function — no LLMClient needed.
+
+    Returns (overall_score, per_slide_scores, quality_report).
+    Used by ReviewerAgent to score without needing LLM access.
+    """
+    optimizer = _ScoringEngine()
+    scores = optimizer.score_slides(presentation)
+    if not scores:
+        return 0.0, [], "No slides to score."
+    overall = sum(s.overall for s in scores) / len(scores)
+    report = optimizer.generate_report(presentation, scores)
+    return overall, scores, report
+
+
+class _ScoringEngine:
+    """Pure-computation scoring engine extracted from ContentOptimizer.
+
+    Contains all 6-component scoring logic without LLM dependency.
+    """
+
+    def __init__(self) -> None:
+        self.similarity_threshold = 0.7
+
+    def score_slides(self, presentation: PresentationContent) -> List[QualityScore]:
+        """Score each slide using SlideForge's full 6-component system."""
+        slides = presentation.slides
+        scores = []
+
+        all_bullet_texts = []
+        for slide in slides:
+            all_bullet_texts.extend([b.text for b in slide.bullets])
+
+        for i, slide in enumerate(slides):
+            structural = self._score_structural_rules(slide)
+            content_q = self._score_content_quality(slide, all_bullet_texts, slides, i)
+            render_q = self._score_render_quality(slide)
+            brief_recon = self._score_brief_reconstruction(slide, presentation.title)
+            source_cov = self._score_source_coverage(slide)
+            narrative = self._score_narrative_flow(slide, slides, i)
+
+            overall = (
+                SLIDEFORGE_WEIGHTS["structural_rules"] * structural
+                + SLIDEFORGE_WEIGHTS["content_quality"] * content_q
+                + SLIDEFORGE_WEIGHTS["render_quality"] * render_q
+                + SLIDEFORGE_WEIGHTS["brief_reconstruction"] * brief_recon
+                + SLIDEFORGE_WEIGHTS["source_coverage"] * source_cov
+                + SLIDEFORGE_WEIGHTS["narrative_flow"] * narrative
+            ) / TOTAL_WEIGHT
+
+            scores.append(QualityScore(
+                structural_rules=round(structural, 3),
+                content_quality=round(content_q, 3),
+                render_quality=round(render_q, 3),
+                brief_reconstruction=round(brief_recon, 3),
+                source_coverage=round(source_cov, 3),
+                narrative_flow=round(narrative, 3),
+                overall=round(overall, 3),
+            ))
+
+        return scores
+
+    def generate_report(
+        self, presentation: PresentationContent, scores: List[QualityScore]
+    ) -> str:
+        """Generate quality report with full SlideForge 6-component breakdown."""
+        lines = [
+            "QUALITY REPORT (SlideForge 6-Component Scoring):",
+            "-" * 50,
+        ]
+
+        if not scores:
+            lines.append("No quality scores available.")
+            return "\n".join(lines)
+
+        n = len(scores)
+        avg_overall = sum(s.overall for s in scores) / n
+        avg_structural = sum(s.structural_rules for s in scores) / n
+        avg_content = sum(s.content_quality for s in scores) / n
+        avg_render = sum(s.render_quality for s in scores) / n
+        avg_brief = sum(s.brief_reconstruction for s in scores) / n
+        avg_source = sum(s.source_coverage for s in scores) / n
+        avg_flow = sum(s.narrative_flow for s in scores) / n
+
+        lines.extend([
+            f"Overall Quality: {avg_overall:.2f}/1.00",
+            f"  Structural Rules (w=1.0):      {avg_structural:.2f}",
+            f"  Content Quality (w=2.0):       {avg_content:.2f}",
+            f"  Render Quality (w=2.0):        {avg_render:.2f}",
+            f"  Brief Reconstruction (w=2.0):  {avg_brief:.2f}",
+            f"  Source Coverage (w=1.5):        {avg_source:.2f}",
+            f"  Narrative Flow (w=1.0):         {avg_flow:.2f}",
+            "",
+        ])
+
+        low_scoring = [
+            (i + 1, s) for i, s in enumerate(scores) if s.overall < 0.6
+        ]
+        if low_scoring:
+            lines.append("LOW-SCORING SLIDES:")
+            for slide_num, score in low_scoring:
+                lines.append(
+                    f"  Slide {slide_num}: {score.overall:.2f} "
+                    f"(structural={score.structural_rules:.2f}, "
+                    f"content={score.content_quality:.2f}, "
+                    f"render={score.render_quality:.2f})"
+                )
+            lines.append("")
+
+        all_warnings = []
+        for slide in presentation.slides:
+            for warning in slide.warnings:
+                all_warnings.append(f"  Slide {slide.slide_number}: {warning}")
+
+        if all_warnings:
+            lines.append("WARNINGS:")
+            lines.extend(all_warnings)
+        else:
+            lines.append("No warnings.")
+
+        return "\n".join(lines)
+
+    def _score_structural_rules(self, slide: SlideContent) -> float:
+        """SlideForge code_rules_reward adapted for SlideContent."""
+        score = 0.0
+        if slide.title and slide.title.strip():
+            score += 0.25
+        if slide.slide_type in (SlideType.TITLE, SlideType.THANK_YOU):
+            score += 0.25
+        elif slide.bullets or slide.key_points or slide.chart_data or slide.table_data:
+            bullet_count = len(slide.bullets) + len(slide.key_points)
+            if 2 <= bullet_count <= MAX_BULLETS_PER_SLIDE:
+                score += 0.25
+            elif bullet_count > 0:
+                score += 0.1
+        if slide.word_count > 0:
+            target = MAX_WORDS_PER_SLIDE
+            ratio = min(slide.word_count, target) / max(slide.word_count, target)
+            score += 0.25 * ratio
+        elif slide.slide_type in (SlideType.TITLE, SlideType.THANK_YOU):
+            score += 0.25
+        has_content = (
+            len(slide.bullets) > 0
+            or len(slide.key_points) > 0
+            or slide.chart_data is not None
+            or slide.table_data is not None
+        )
+        if has_content or slide.slide_type in (SlideType.TITLE, SlideType.THANK_YOU):
+            score += 0.25
+        return score
+
+    def _score_content_quality(
+        self, slide: SlideContent, all_bullet_texts: List[str],
+        all_slides: List[SlideContent], index: int
+    ) -> float:
+        """SlideForge content_quality_reward adapted for SlideContent."""
+        if slide.slide_type in (SlideType.TITLE, SlideType.THANK_YOU):
+            return 1.0
+
+        bullet_texts = [b.text for b in slide.bullets]
+        if not bullet_texts:
+            return 0.5 if slide.chart_data or slide.table_data else 0.0
+
+        score = 0.0
+        title_words = set(slide.title.lower().split())
+        bullet_words = set(" ".join(bullet_texts).lower().split())
+        overlap = title_words & bullet_words
+        relevance = len(overlap) / max(len(title_words), 1)
+        score += 0.35 * min(1.0, relevance * 2)
+
+        if slide.source_sections:
+            score += 0.25
+
+        other_bullets = [
+            b.text for j, s in enumerate(all_slides)
+            for b in s.bullets if j != index
+        ]
+        if other_bullets and bullet_texts:
+            max_sim = 0.0
+            for bt in bullet_texts:
+                for ob in other_bullets:
+                    sim = SequenceMatcher(None, bt.lower(), ob.lower()).ratio()
+                    max_sim = max(max_sim, sim)
+            uniqueness = 1.0 - max_sim
+            score += 0.20 * max(0.0, uniqueness)
+        else:
+            score += 0.20
+
+        score += 0.20 * self._narrative_subscore(slide, all_slides, index)
+        return min(1.0, score)
+
+    def _score_render_quality(self, slide: SlideContent) -> float:
+        """Render quality scoring."""
+        if slide.slide_type in (SlideType.TITLE, SlideType.THANK_YOU):
+            return 1.0
+        score = 0.0
+        if slide.word_count <= MAX_WORDS_PER_SLIDE:
+            score += 0.4
+        elif slide.word_count <= MAX_WORDS_PER_SLIDE * 1.5:
+            score += 0.2
+        has_content = (
+            len(slide.bullets) > 0
+            or slide.chart_data is not None
+            or slide.table_data is not None
+        )
+        if has_content:
+            score += 0.3
+        if slide.title and len(slide.title) <= 50:
+            score += 0.3
+        elif slide.title:
+            score += 0.15
+        return min(1.0, score)
+
+    def _score_brief_reconstruction(self, slide: SlideContent, pres_title: str) -> float:
+        """Brief reconstruction scoring."""
+        if slide.slide_type in (SlideType.TITLE, SlideType.THANK_YOU):
+            return 1.0
+        score = 0.0
+        if slide.title:
+            title_sim = SequenceMatcher(
+                None, slide.title.lower(), pres_title.lower()
+            ).ratio()
+            score += 0.5 * min(1.0, title_sim * 3)
+        if slide.key_message and len(slide.key_message) > 10:
+            score += 0.3
+        if slide.source_sections:
+            score += 0.2
+        return min(1.0, score)
+
+    def _score_source_coverage(self, slide: SlideContent) -> float:
+        """Source coverage scoring."""
+        if slide.slide_type in (SlideType.TITLE, SlideType.THANK_YOU):
+            return 1.0
+        has_content = (
+            len(slide.bullets) > 0
+            or slide.chart_data is not None
+            or slide.table_data is not None
+        )
+        if not has_content:
+            return 0.0
+        if slide.chart_data or slide.table_data:
+            return 1.0
+        if not slide.source_sections:
+            return 0.0
+        sections_represented = set()
+        for bullet in slide.bullets:
+            sections_represented.add(bullet.source_section)
+        coverage = len(sections_represented) / len(slide.source_sections)
+        return min(1.0, coverage)
+
+    def _narrative_subscore(
+        self, slide: SlideContent, all_slides: List[SlideContent], index: int
+    ) -> float:
+        """Logical flow from previous slide."""
+        if index == 0:
+            return 1.0
+        prev_slide = all_slides[index - 1]
+        if not prev_slide.title or not slide.title:
+            return 0.5
+        title_sim = SequenceMatcher(
+            None, slide.title.lower(), prev_slide.title.lower()
+        ).ratio()
+        return min(1.0, 0.3 + title_sim)
+
+    def _score_narrative_flow(
+        self, slide: SlideContent, all_slides: List[SlideContent], index: int
+    ) -> float:
+        """Logical flow from previous slide (standalone component)."""
+        return self._narrative_subscore(slide, all_slides, index)
+
+
 class ContentOptimizer:
     """Final quality checks and optimizations for presentation content.
 

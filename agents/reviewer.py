@@ -12,7 +12,7 @@ Responsibilities:
 
 from agents.base import BaseAgent
 from agents.protocol import AgentRole, MessageType, PipelineState
-from step3.content_optimizer import ContentOptimizer
+from step3.content_optimizer import score_presentation
 from step4.validator import validate_presentation
 
 from pptx import Presentation
@@ -55,22 +55,21 @@ class ReviewerAgent(BaseAgent):
         else:
             validation_issues = ["No PPTX file to validate"]
 
-        # 2. Score content quality using SlideForge system
-        optimizer = ContentOptimizer()
-        quality_score = optimizer._score_slides(content.slides)
-        quality_report = optimizer.generate_quality_report(content.slides)
+        # 2. Score content quality using standalone scoring (no LLM needed)
+        if content is not None:
+            overall, scores, quality_report = score_presentation(content)
+        else:
+            overall, scores, quality_report = 0.0, [], "No content to score."
 
-        # 3. Compute aggregate score
-        overall = quality_score.overall if quality_score else 0.0
         state.quality_score = overall
         state.quality_report = quality_report
 
-        # 4. Determine pass/fail
+        # 3. Determine pass/fail
         critical_issues = [i for i in validation_issues if "overflow" in i.lower() or "margin" in i.lower()]
         passed = overall >= self.threshold and len(critical_issues) == 0
         state.review_passed = passed
 
-        # 5. Generate feedback
+        # 4. Generate feedback for Designer retry
         feedback_parts = []
         if not passed:
             if overall < self.threshold:
@@ -85,6 +84,17 @@ class ReviewerAgent(BaseAgent):
                 feedback_parts.append(
                     f"Validation: {len(validation_issues)} issues total"
                 )
+            # Include per-component breakdown for targeted feedback
+            if scores:
+                low_components = []
+                avg = lambda attr: sum(getattr(s, attr) for s in scores) / len(scores)
+                for comp in ["structural_rules", "content_quality", "render_quality",
+                             "source_coverage", "narrative_flow"]:
+                    avg_val = avg(comp)
+                    if avg_val < 0.5:
+                        low_components.append(f"{comp}={avg_val:.2f}")
+                if low_components:
+                    feedback_parts.append(f"Weak areas: {', '.join(low_components)}")
 
         state.review_feedback = " | ".join(feedback_parts) if feedback_parts else "PASSED"
 
