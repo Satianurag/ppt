@@ -47,7 +47,7 @@ class ChartConfig(BaseModel):
     """Configuration for chart slides."""
     chart_type: ChartType = Field(description="Type of chart to generate")
     table_index: int = Field(ge=0, description="Index of source table in inventory")
-    title: str = Field(max_length=50, description="Chart title")
+    title: str = Field(max_length=100, description="Chart title")
 
 
 class SlidePlan(BaseModel):
@@ -55,14 +55,14 @@ class SlidePlan(BaseModel):
     slide_number: int = Field(ge=1, le=SLIDE_BUDGET, description="Slide position in deck")
     type: SlideType = Field(description="Purpose/type of slide")
     layout: LayoutType = Field(description="Layout template to use")
-    title: str = Field(max_length=50, description="Slide title")
-    subtitle: Optional[str] = Field(default=None, max_length=80, description="Optional subtitle")
+    title: str = Field(max_length=100, description="Slide title")
+    subtitle: Optional[str] = Field(default=None, max_length=150, description="Optional subtitle")
     source_sections: List[str] = Field(
         default_factory=list,
         description="Section IDs from ContentInventory that feed this slide"
     )
     key_message: str = Field(
-        max_length=100,
+        max_length=200,
         description="One sentence takeaway for this slide"
     )
     content_type: Literal["bullet", "chart", "table", "infographic", "mixed"] = Field(
@@ -74,7 +74,7 @@ class SlidePlan(BaseModel):
     )
     bullet_points: List[str] = Field(
         default_factory=list,
-        max_length=MAX_BULLETS_PER_SLIDE,
+        max_length=10,
         description="Bullet items for slide"
     )
     max_bullets: int = Field(

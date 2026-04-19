@@ -18,10 +18,10 @@ TARGET_WORDS_PER_SLIDE: int = 50
 MAX_WORDS_PER_SLIDE: int = 60
 
 # Character limits (reused from PPTAgent editor.yaml pattern)
-MAX_TITLE_CHARS: int = 50
-MAX_SUBTITLE_CHARS: int = 80
-MAX_KEY_MESSAGE_CHARS: int = 100
-MAX_BULLET_CHARS: int = 60
+MAX_TITLE_CHARS: int = 100
+MAX_SUBTITLE_CHARS: int = 150
+MAX_KEY_MESSAGE_CHARS: int = 200
+MAX_BULLET_CHARS: int = 120
 
 # Rate limiting
 MAX_RPM: int = 8

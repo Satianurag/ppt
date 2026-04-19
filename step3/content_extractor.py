@@ -18,7 +18,7 @@ from .chart_data_extractor import ChartDataExtractor
 from .bullet_rewriter import BulletRewriter
 from .content_optimizer import ContentOptimizer
 from llm import LLMClient
-from constants import SLIDE_BUDGET
+from constants import SLIDE_BUDGET, MAX_BULLET_CHARS
 
 
 class ContentExtractor:
@@ -134,7 +134,7 @@ class ContentExtractor:
             if slide_plan.bullet_points:
                 slide_content.bullets = [
                     ExtractedBullet(
-                        text=bp,
+                        text=bp[:MAX_BULLET_CHARS],
                         priority=10 - i,
                         source_section=slide_plan.source_sections[0] if slide_plan.source_sections else "auto",
                     )
@@ -156,7 +156,7 @@ class ContentExtractor:
             if slide_plan.bullet_points:
                 slide_content.bullets = [
                     ExtractedBullet(
-                        text=bp,
+                        text=bp[:MAX_BULLET_CHARS],
                         priority=10 - i,
                         source_section=slide_plan.source_sections[0] if slide_plan.source_sections else "plan",
                     )

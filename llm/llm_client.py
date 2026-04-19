@@ -164,11 +164,116 @@ class GoogleStructuredClient(StructuredLLMClient):
         return result
 
 
+class MistralClient(LLMClient):
+    """Mistral AI implementation using LangChain."""
+
+    def __init__(self, config: Optional[LLMConfig] = None) -> None:
+        super().__init__(config)
+        from langchain_mistralai import ChatMistralAI
+
+        kwargs: dict = {
+            "model": self.config.model,
+            "api_key": self.config.api_key,
+            "temperature": self.config.temperature,
+        }
+
+        if self.config.max_output_tokens:
+            kwargs["max_tokens"] = self.config.max_output_tokens
+
+        self.model = ChatMistralAI(**kwargs)
+
+    def invoke(self, prompt: str) -> str:
+        self._check_rate_limit()
+        response = self.model.invoke(prompt)
+        self.request_times.append(time.time())
+        return response.content
+
+    def with_structured_output(self, schema: Type[T]) -> "MistralStructuredClient[T]":
+        """Return structured output client."""
+        return MistralStructuredClient(self, schema)
+
+
+class MistralStructuredClient(StructuredLLMClient):
+    """Mistral AI with structured output.
+
+    Uses raw JSON mode + manual Pydantic parsing to sanitize LLM output
+    before validation. Mistral tends to exceed list/string length constraints
+    that LangChain's with_structured_output can't handle gracefully.
+    """
+
+    def invoke(self, prompt: str) -> T:
+        import json as _json
+
+        self.client._check_rate_limit()
+
+        schema_json = self.schema.model_json_schema()
+        augmented_prompt = (
+            f"{prompt}\n\nRespond with a single valid JSON object matching this schema. "
+            f"Do NOT wrap in markdown code fences.\n{_json.dumps(schema_json, indent=2)}"
+        )
+
+        raw_text = self.client.invoke(augmented_prompt)
+        self.client.request_times.append(time.time())
+
+        # Strip markdown code fences if present
+        text = raw_text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+
+        data = _json.loads(text)
+        data = self._sanitize(data, schema_json)
+        return self.schema.model_validate(data)
+
+    def _sanitize(self, data: dict, schema: dict) -> dict:
+        """Truncate strings and trim lists to fit schema constraints."""
+        props = schema.get("properties", {})
+        for key, spec in props.items():
+            if key not in data:
+                continue
+            val = data[key]
+            # Truncate strings
+            if isinstance(val, str) and "maxLength" in spec:
+                data[key] = val[: spec["maxLength"]]
+            # Trim lists
+            if isinstance(val, list) and "maxItems" in spec:
+                data[key] = val[: spec["maxItems"]]
+            # Recurse into list-of-objects
+            if isinstance(val, list) and "items" in spec:
+                item_ref = spec["items"]
+                item_schema = self._resolve_ref(item_ref, schema)
+                if item_schema:
+                    data[key] = [
+                        self._sanitize(item, item_schema) if isinstance(item, dict) else item
+                        for item in data[key]
+                    ]
+            # Recurse into nested objects
+            if isinstance(val, dict) and spec.get("type") == "object":
+                data[key] = self._sanitize(val, spec)
+        return data
+
+    def _resolve_ref(self, ref_spec: dict, root_schema: dict) -> dict | None:
+        """Resolve $ref or inline schema for list items."""
+        if "$ref" in ref_spec:
+            ref_path = ref_spec["$ref"].split("/")
+            node = root_schema
+            for part in ref_path:
+                if part == "#":
+                    node = root_schema
+                else:
+                    node = node.get(part, {})
+            return node if node else None
+        if "properties" in ref_spec:
+            return ref_spec
+        return None
+
+
 class LLMClientFactory:
     """Factory for creating LLM clients."""
 
     _providers = {
         "google": GoogleGenAIClient,
+        "mistral": MistralClient,
     }
 
     @classmethod
