@@ -4,9 +4,18 @@ All values in EMU (English Metric Units) — python-pptx's native unit.
 Slide dimensions: 13.33" × 7.50" for all 3 templates (verified).
 
 Handles CRITICAL-5: Master-level obstacle zones per template.
+
+Dynamic grid layouts (3B from hackathon_research_v3.md:506-508):
+  1 item  → full-width
+  2 items → side-by-side
+  3+ items → grid
+
+Proportional space filling (3C from Common Mistakes):
+  Shapes should fill ≥40% of the safe content area.
 """
 
 from pptx.util import Inches, Pt
+from pptx.enum.text import PP_ALIGN
 
 from step4.template_manager import TemplateType, MASTER_OBSTACLES
 
@@ -27,7 +36,10 @@ FOOTER_FONT_SIZE = Pt(10)
 
 
 class Grid:
-    """Template-aware coordinate system for placing shapes on content slides."""
+    """Template-aware coordinate system for placing shapes on content slides.
+
+    Includes dynamic grid layout helpers (3B) and proportional space filling (3C).
+    """
 
     def __init__(self, template_type: TemplateType) -> None:
         self.template_type = template_type
@@ -86,3 +98,90 @@ class Grid:
         # Infographic: process flow (horizontal chevrons)
         self.process_top = Inches(2.50)
         self.process_height = Inches(2.00)
+
+    # ── Dynamic Grid Layouts (3B) ────────────────────────────────────
+    # hackathon_research_v3.md:506-508:
+    #   1 item → full-width
+    #   2 items → side-by-side
+    #   3+ items → grid
+
+    def dynamic_layout(self, n_items: int, gap: float = 0.25) -> list[tuple[int, int, int, int]]:
+        """Compute (left, top, width, height) for n items using dynamic grid.
+
+        Returns list of (left, top, width, height) tuples in EMU.
+        """
+        if n_items <= 0:
+            return []
+
+        gap_emu = Inches(gap)
+
+        if n_items == 1:
+            return [(self.content_left, self.content_top,
+                     self.content_width, self.content_height)]
+
+        if n_items == 2:
+            col_width = int((self.content_width - gap_emu) / 2)
+            return [
+                (self.content_left, self.content_top,
+                 col_width, self.content_height),
+                (self.content_left + col_width + gap_emu, self.content_top,
+                 col_width, self.content_height),
+            ]
+
+        # 3+ items: grid layout
+        if n_items <= 4:
+            cols = 2
+        elif n_items <= 6:
+            cols = 3
+        elif n_items <= 9:
+            cols = 3
+        else:
+            cols = 4
+
+        rows = (n_items + cols - 1) // cols
+        cell_width = int((self.content_width - gap_emu * (cols - 1)) / cols)
+        cell_height = int((self.content_height - gap_emu * (rows - 1)) / rows)
+
+        positions = []
+        for idx in range(n_items):
+            row = idx // cols
+            col = idx % cols
+            left = self.content_left + int(col * (cell_width + gap_emu))
+            top = self.content_top + int(row * (cell_height + gap_emu))
+            positions.append((left, top, cell_width, cell_height))
+
+        return positions
+
+    def proportional_fill(self, n_items: int) -> float:
+        """Calculate what fraction of safe area n items would fill.
+
+        Returns ratio (0.0-1.0). Target is ≥0.40 per Common Mistakes.
+        """
+        if n_items <= 0:
+            return 0.0
+
+        positions = self.dynamic_layout(n_items)
+        total_area = sum(w * h for _, _, w, h in positions)
+        safe_area = int(self.content_width) * int(self.content_height)
+        return total_area / safe_area if safe_area > 0 else 0.0
+
+
+# ── PPTAgent merge_cells — exact copy from pptagent/apis.py:345-353 ──
+
+def merge_cells(merge_area: list[tuple[int, int, int, int]], table) -> None:
+    """Merge cells in a python-pptx table.
+
+    Exact copy from PPTAgent (pptagent/apis.py:345-353).
+
+    Args:
+        merge_area: List of (row1, col1, row2, col2) tuples defining merge regions.
+        table: A python-pptx GraphicFrame (table shape).
+    """
+    if merge_area is None or len(merge_area) == 0:
+        return
+    for x1, y1, x2, y2 in merge_area:
+        table.table.cell(x1, y1).merge(table.table.cell(x2, y2))
+        for x, y in zip(range(x1, x2 + 1), range(y1, y2 + 1)):
+            tf = table.table.cell(x, y).text_frame
+            for p in tf.paragraphs:
+                p.alignment = PP_ALIGN.CENTER

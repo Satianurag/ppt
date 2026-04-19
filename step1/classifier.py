@@ -1,7 +1,9 @@
 """Section and content type classification logic.
 
-Includes deterministic chart type selection reused from PPT Master's quickLookup
-pattern (hackathon_research_v3.md:403-418) and hackathon_final_analysis1.md:326-344.
+Chart type selection uses the FULL quickLookup from PPT Master's
+charts_index.json (hugohe3/ppt-master templates/charts/charts_index.json).
+All 18 semantic categories are mapped.
+Also includes hackathon_final_analysis1.md:326-344 deterministic rules.
 """
 
 import re
@@ -151,19 +153,88 @@ def is_temporal_column(header: str, values: List[str]) -> bool:
     return False
 
 
+# PPT Master quickLookup — exact copy from hugohe3/ppt-master
+# templates/charts/charts_index.json (all 18 semantic categories)
+QUICK_LOOKUP: dict[str, list[str]] = {
+    "ranking": ["horizontal_bar", "bar", "pareto"],
+    "comparison": ["bar", "grouped_bar", "butterfly", "dumbbell"],
+    "trend": ["line", "area", "stacked_area", "dual_axis_line"],
+    "composition": ["donut", "pie", "treemap"],
+    "kpi": ["kpi_cards", "bullet", "gauge", "progress_bar"],
+    "conversion": ["funnel", "sankey", "waterfall"],
+    "distribution": ["box_plot", "heatmap", "scatter", "bubble"],
+    "correlation": ["scatter", "bubble", "radar"],
+    "roadmap": ["gantt", "timeline", "process_flow"],
+    "relationship": ["org_chart", "sankey", "matrix_2x2"],
+    "flow": ["process_flow", "sankey", "waterfall"],
+    "strategy": ["swot_analysis", "porter_five_forces", "matrix_2x2"],
+    "hierarchy": ["pyramid", "isometric_stairs", "org_chart", "concentric_circles"],
+    "infographic": ["icon_grid", "numbered_steps", "cycle_diagram", "venn_diagram",
+                    "pros_cons", "mind_map", "hub_spoke", "sector_diagram",
+                    "word_cloud", "vertical_list"],
+    "pros_cons": ["pros_cons", "butterfly", "swot_analysis", "comparison_table",
+                  "comparison_columns"],
+    "cause_effect": ["fishbone_diagram", "process_flow"],
+    "journey": ["snake_flow", "timeline", "roadmap_vertical", "chevron_process"],
+    "pricing": ["comparison_columns", "comparison_table"],
+}
+
+# Semantic keywords that map headings/content to quickLookup categories
+SEMANTIC_CATEGORY_KEYWORDS: dict[str, list[str]] = {
+    "ranking": ["ranking", "rank", "top", "best", "worst", "leading", "largest", "highest",
+               "lowest", "bottom", "leaderboard"],
+    "comparison": ["comparison", "compare", "vs", "versus", "benchmark", "competitive",
+                   "relative", "against"],
+    "trend": ["trend", "growth", "decline", "over time", "annual", "quarterly",
+              "monthly", "year-over-year", "yoy", "cagr", "forecast", "projection"],
+    "composition": ["share", "proportion", "percentage", "breakdown", "composition",
+                    "distribution", "mix", "allocation", "split"],
+    "kpi": ["kpi", "metric", "target", "actual", "performance", "score",
+            "achievement", "dashboard", "indicator"],
+    "conversion": ["funnel", "conversion", "pipeline", "stage", "drop-off",
+                   "waterfall", "bridge"],
+    "distribution": ["distribution", "spread", "variance", "outlier", "histogram",
+                     "quartile", "median", "deviation"],
+    "correlation": ["correlation", "relationship", "regression", "scatter",
+                    "association", "r-squared"],
+    "flow": ["flow", "process", "workflow", "pipeline", "sequence"],
+    "hierarchy": ["hierarchy", "pyramid", "tier", "level", "organizational",
+                  "structure", "layered"],
+    "pros_cons": ["pros", "cons", "advantages", "disadvantages", "strengths",
+                  "weaknesses", "benefits", "drawbacks", "swot"],
+    "journey": ["journey", "roadmap", "milestone", "phase", "timeline",
+                "chronology", "evolution", "history"],
+}
+
+
+def classify_semantic_category(heading: str, content_text: str) -> Optional[str]:
+    """Classify content into a PPT Master quickLookup semantic category.
+
+    Returns the category name (e.g. 'trend', 'comparison') or None.
+    """
+    text = f"{heading} {content_text}".lower()
+    best_category = None
+    best_score = 0
+
+    for category, keywords in SEMANTIC_CATEGORY_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in text)
+        if score > best_score:
+            best_score = score
+            best_category = category
+
+    return best_category if best_score > 0 else None
+
+
 def select_chart_type(table_info: TableInfo, header_row: List[str], data_rows: List[List[str]]) -> str:
-    """Deterministic chart type selection based on data shape.
+    """Deterministic chart type selection using PPT Master's full quickLookup.
 
-    Reused from PPT Master's quickLookup pattern (hackathon_research_v3.md:403-418)
-    and hackathon_final_analysis1.md:326-344.
+    Three-step process:
+    1. Try semantic classification from header text → quickLookup category
+    2. Apply data-shape rules (hackathon_final_analysis1.md:326-344)
+    3. Fallback to 'bar' if nothing matches
 
-    Rules:
-    - temporal + numeric → line_chart
-    - 1 category + 1 numeric, ≤6 rows → bar
-    - 1 category + 1 numeric, >6 rows → horizontal_bar
-    - 1 category + ≥2 numeric → grouped_bar
-    - 2 cols, values sum to ~100 → donut
-    - else → table (keep as-is)
+    The quickLookup returns ordered preferences — pick the first chart type
+    that our renderer supports (ChartType enum).
     """
     has_temporal = table_info.has_temporal
     num_numeric = len(table_info.numeric_columns)
@@ -174,6 +245,17 @@ def select_chart_type(table_info: TableInfo, header_row: List[str], data_rows: L
     if has_temporal:
         num_category_cols -= len(table_info.temporal_columns)
 
+    # Step 1: Semantic category from header text
+    header_text = " ".join(header_row)
+    semantic_cat = classify_semantic_category(header_text, "")
+    if semantic_cat and semantic_cat in QUICK_LOOKUP:
+        preferred = QUICK_LOOKUP[semantic_cat]
+        # Map quickLookup names to our ChartType enum values
+        for pref in preferred:
+            if pref in _RENDERABLE_CHART_TYPES:
+                return pref
+
+    # Step 2: Data-shape rules (hackathon_final_analysis1.md:326-344)
     if has_temporal and num_numeric >= 1:
         return "line"
 
@@ -186,7 +268,6 @@ def select_chart_type(table_info: TableInfo, header_row: List[str], data_rows: L
         return "grouped_bar"
 
     if num_cols == 2 and num_numeric == 1 and num_rows >= 2:
-        # Check if values sum to approximately 100 (parts-of-whole)
         try:
             numeric_col = table_info.numeric_columns[0]
             values = []
@@ -205,3 +286,10 @@ def select_chart_type(table_info: TableInfo, header_row: List[str], data_rows: L
         return "bar"
 
     return "bar"
+
+
+# Chart types our python-pptx renderer can handle
+_RENDERABLE_CHART_TYPES = {
+    "bar", "horizontal_bar", "grouped_bar", "line", "pie", "donut",
+    "area", "stacked_bar", "stacked_area",
+}

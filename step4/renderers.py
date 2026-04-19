@@ -25,6 +25,8 @@ from pptx.util import Inches, Pt
 from step2.slide_plan_models import SlideType, LayoutType, ChartType
 from step3.content_models import SlideContent, ChartData, TableData
 from step4.grid import Grid, TITLE_FONT_SIZE, SUBTITLE_FONT_SIZE, BODY_FONT_SIZE, FOOTER_FONT_SIZE
+from step4.font_sizing import auto_font_size_pt, auto_font_size
+from step4.table_layout import calculate_table_layout, compute_column_widths
 from step4.template_manager import (
     TemplateType, LayoutRole, get_layout, COVER_PLACEHOLDERS,
 )
@@ -236,7 +238,7 @@ def render_bullets(
 
     _add_title_and_subtitle(slide, grid, slide_content.title, slide_content.subtitle)
 
-    # Build bullet text box
+    # Build bullet text box with SlidesAI auto font sizing
     txBox = slide.shapes.add_textbox(
         grid.content_left, grid.content_top,
         grid.content_width, grid.content_height,
@@ -245,10 +247,13 @@ def render_bullets(
     tf.word_wrap = True
 
     bullets = _get_bullet_texts(slide_content)
+    all_text = " ".join(bullets)
+    font_size = auto_font_size_pt(all_text, "full_width")
+
     for i, bullet_text in enumerate(bullets):
         p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
         p.text = f"• {bullet_text}"
-        p.font.size = BODY_FONT_SIZE
+        p.font.size = font_size
         p.space_after = Pt(8)
 
     _add_key_message_footer(slide, grid, slide_content.key_message)
@@ -268,7 +273,7 @@ def _render_bullets_uae(slide, slide_content: SlideContent, grid: Grid) -> None:
         elif idx == 2:  # Subtitle
             ph.text = slide_content.subtitle or ""
 
-    # Render bullets in a textbox (not in the tiny idx=11 footnote placeholder)
+    # Render bullets in a textbox with auto font sizing
     bullets = _get_bullet_texts(slide_content)
     if bullets:
         txBox = slide.shapes.add_textbox(
@@ -277,22 +282,31 @@ def _render_bullets_uae(slide, slide_content: SlideContent, grid: Grid) -> None:
         )
         tf = txBox.text_frame
         tf.word_wrap = True
+        all_text = " ".join(bullets)
+        font_size = auto_font_size_pt(all_text, "full_width")
         for i, bullet_text in enumerate(bullets):
             p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
             p.text = f"• {bullet_text}"
-            p.font.size = BODY_FONT_SIZE
+            p.font.size = font_size
             p.space_after = Pt(8)
 
 
 def _get_bullet_texts(slide_content: SlideContent) -> list[str]:
-    """Extract bullet text from either bullets or key_points."""
+    """Extract bullet text from either bullets or key_points.
+
+    Uses paragraph_form for slides with ≤3 key points (more detail/context),
+    bullet_form for slides with >3 key points (concise).
+    This implements PARTIAL-4: actually USE paragraph_form from KeyPoint.
+    """
     if slide_content.bullets:
         return [b.text for b in slide_content.bullets]
     if slide_content.key_points:
+        if len(slide_content.key_points) <= 3:
+            return [kp.paragraph_form for kp in slide_content.key_points]
         texts = []
         for kp in slide_content.key_points:
             texts.extend(kp.bullet_form)
-        return texts[:6]  # MAX_BULLETS_PER_SLIDE
+        return texts[:6]
     return []
 
 
@@ -451,15 +465,11 @@ def render_table(
     )
     table = table_shape.table
 
-    # Auto column width based on content length (PPTAgent pattern)
+    # Auto column width using PPTAgent pattern (apis.py:330-338) via table_layout module
     all_data = [table_data.headers[:max_cols]] + [r[:max_cols] for r in table_data.rows[:max_rows - 1]]
-    max_lengths = [
-        max(len(str(all_data[r][c])) for r in range(len(all_data)))
-        for c in range(max_cols)
-    ]
-    total_length = max(sum(max_lengths), 1)
-    for c in range(max_cols):
-        table.columns[c].width = int((max_lengths[c] / total_length) * grid.table_width)
+    col_widths = compute_column_widths(all_data, grid.table_width)
+    for c in range(min(max_cols, len(col_widths))):
+        table.columns[c].width = col_widths[c]
 
     # Fill header row
     for c in range(max_cols):
@@ -478,8 +488,15 @@ def render_table(
 
 
 def _style_table(table, rows: int, cols: int, table_data: TableData) -> None:
-    """Apply zebra stripes, bold headers, theme colors (solution_architecture.md GAP 3)."""
-    font_size = Pt(table_data.recommended_font_size)
+    """Apply zebra stripes, bold headers, theme colors (solution_architecture.md GAP 3).
+
+    Uses SlidesAI table layout heuristics for dynamic font sizing.
+    """
+    # Use SlidesAI calculate_table_layout heuristics for dynamic sizing
+    _, table_font, _ = calculate_table_layout(
+        "", len(table_data.rows), len(table_data.headers)
+    )
+    font_size = table_font
     zebra_light = RGBColor(0xF0, 0xF0, 0xF0)
 
     for r in range(rows):
@@ -587,17 +604,19 @@ def _render_comparison(
     bullets = _get_bullet_texts(slide_content)
     mid = len(bullets) // 2
 
-    # Left column
+    # Left column with auto font sizing for two-column layout
     left_box = slide.shapes.add_textbox(
         grid.left_col_left, grid.content_top,
         grid.left_col_width, grid.content_height,
     )
     tf_left = left_box.text_frame
     tf_left.word_wrap = True
+    left_text = " ".join(bullets[:mid])
+    font_size = auto_font_size_pt(left_text, "two_col")
     for i, text in enumerate(bullets[:mid]):
         p = tf_left.paragraphs[0] if i == 0 else tf_left.add_paragraph()
         p.text = f"• {text}"
-        p.font.size = BODY_FONT_SIZE
+        p.font.size = font_size
         p.space_after = Pt(6)
 
     # Right column
@@ -607,10 +626,12 @@ def _render_comparison(
     )
     tf_right = right_box.text_frame
     tf_right.word_wrap = True
+    right_text = " ".join(bullets[mid:])
+    font_size_r = auto_font_size_pt(right_text, "two_col")
     for i, text in enumerate(bullets[mid:]):
         p = tf_right.paragraphs[0] if i == 0 else tf_right.add_paragraph()
         p.text = f"• {text}"
-        p.font.size = BODY_FONT_SIZE
+        p.font.size = font_size_r
         p.space_after = Pt(6)
 
     _add_key_message_footer(slide, grid, slide_content.key_message)
