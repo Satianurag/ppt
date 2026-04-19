@@ -56,10 +56,11 @@ class ContentTriageAgent:
         for slide in plan.slides:
             if slide.chart_config:
                 if slide.chart_config.table_index not in data_table_indices:
-                    raise ValueError(
-                        f"Slide {slide.slide_number} references invalid chart table: "
-                        f"{slide.chart_config.table_index}"
-                    )
+                    print(f"  [Triage] Slide {slide.slide_number}: chart table "
+                          f"{slide.chart_config.table_index} not found — converting to content slide")
+                    slide.chart_config = None
+                    if slide.content_type == "chart":
+                        slide.content_type = "content"
 
         expected_numbers = list(range(1, len(plan.slides) + 1))
         actual_numbers = [s.slide_number for s in plan.slides]

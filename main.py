@@ -3,6 +3,10 @@
 Multi-agent architecture (30% of hackathon score — Code Quality & Agentic):
   Coordinator → Strategist → Designer → Executor → Reviewer
 
+Orchestration modes:
+  --agents      Pure-Python CoordinatorAgent with retry loop
+  --langgraph   LangGraph StateGraph with conditional edges (recommended)
+
 Each agent has a clear role, communicates via structured AgentMessage objects,
 and follows the retry-with-feedback pattern from PPTAgent.
 
@@ -13,12 +17,24 @@ import os
 import sys
 from pathlib import Path
 
+from constants import MAX_INPUT_SIZE_BYTES
 from step1 import MarkdownParser
 from step2 import ContentTriageAgent
 from step3 import ContentExtractor
 from step3.content_models import PresentationContent
 from step4 import build_presentation
 from llm import get_llm_client
+
+
+def _validate_input_size(markdown_path: str) -> None:
+    """Raise ValueError if markdown file exceeds 5 MB limit."""
+    file_size = Path(markdown_path).stat().st_size
+    if file_size > MAX_INPUT_SIZE_BYTES:
+        size_mb = file_size / (1024 * 1024)
+        raise ValueError(
+            f"Input file is {size_mb:.1f} MB — exceeds the 5 MB maximum. "
+            f"Please reduce the file size before processing."
+        )
 
 
 def process_markdown_to_presentation(
@@ -39,6 +55,8 @@ def process_markdown_to_presentation(
     Returns:
         Tuple of (PresentationContent, pptx_path or None).
     """
+    _validate_input_size(markdown_path)
+
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -111,6 +129,8 @@ def run_multi_agent(
     Returns:
         PipelineState with all results.
     """
+    _validate_input_size(markdown_path)
+
     from agents import CoordinatorAgent
 
     coordinator = CoordinatorAgent(
@@ -122,10 +142,11 @@ def run_multi_agent(
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python main.py <markdown_file> [template.pptx] [--agents]")
+        print("Usage: python main.py <markdown_file> [template.pptx] [--agents|--langgraph]")
         print("\nExamples:")
         print("  python main.py research/example.md template.pptx")
         print("  python main.py research/example.md template.pptx --agents")
+        print("  python main.py research/example.md template.pptx --langgraph")
         sys.exit(1)
 
     api_key = os.getenv("LLM_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -134,12 +155,19 @@ if __name__ == "__main__":
         sys.exit(1)
 
     use_agents = "--agents" in sys.argv
+    use_langgraph = "--langgraph" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     markdown_file = args[0]
     template_file = args[1] if len(args) > 1 else None
 
-    if use_agents and template_file:
-        # Multi-agent pipeline
+    if use_langgraph and template_file:
+        # LangGraph multi-agent pipeline (recommended)
+        from agents.langgraph_pipeline import run_langgraph_pipeline
+        state = run_langgraph_pipeline(markdown_file, template_file)
+        print(f"\nPPTX: {state.pptx_path}")
+        print(f"Quality: {state.quality_score:.2f}")
+    elif use_agents and template_file:
+        # Pure-Python multi-agent pipeline
         state = run_multi_agent(markdown_file, template_file)
         print(f"\nPPTX: {state.pptx_path}")
         print(f"Quality: {state.quality_score:.2f}")

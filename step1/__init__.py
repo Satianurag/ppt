@@ -17,6 +17,12 @@ from .classifier import (
     detect_timeline,
     select_chart_type,
 )
+from .geo_detector import (
+    detect_countries,
+    detect_regions,
+    detect_geographic_content,
+    has_geographic_content,
+)
 
 __all__ = [
     "MarkdownParser",
@@ -32,4 +38,8 @@ __all__ = [
     "detect_process",
     "detect_timeline",
     "select_chart_type",
+    "detect_countries",
+    "detect_regions",
+    "detect_geographic_content",
+    "has_geographic_content",
 ]

@@ -40,6 +40,7 @@ from step4.infographic_renderers import (
     render_icon_grid,
 )
 from step4.validator import validate_presentation
+from step1.geo_detector import has_geographic_content
 
 # Infographic-first: keywords that trigger infographic rendering
 # instead of default bullet slides (research: hackathon_research.md:68-69)
@@ -107,11 +108,17 @@ _ICON_KEYWORD_MAP: dict[str, str] = {
 
 
 def _infer_icon_category(text: str) -> str:
-    """Infer an icon category from bullet text using keyword matching."""
+    """Infer an icon category from bullet text using keyword matching.
+
+    Includes geographic detection per judge feedback:
+    "Flag could be added for countries" (Common Mistakes PPTX).
+    """
     lower = text.lower()
     for keyword, category in _ICON_KEYWORD_MAP.items():
         if keyword in lower:
             return category
+    if has_geographic_content(text):
+        return "globe"
     return "check"
 
 
@@ -208,6 +215,31 @@ def build_presentation(
     return output_path, issues
 
 
+def _add_speaker_notes(prs, slide_content: SlideContent) -> None:
+    """Add speaker notes to the most recently added slide.
+
+    Uses key_message as the primary note, with title as context.
+    gap_analysis.md listed speaker notes as "well addressed" — this implements it.
+    """
+    if not prs.slides:
+        return
+    slide = prs.slides[-1]
+    notes_parts: list[str] = []
+    if slide_content.key_message:
+        notes_parts.append(slide_content.key_message)
+    if slide_content.title and slide_content.title not in (slide_content.key_message or ""):
+        notes_parts.append(f"Slide: {slide_content.title}")
+    if not notes_parts:
+        return
+    try:
+        notes_slide = slide.notes_slide
+        tf = notes_slide.notes_text_frame
+        if tf is not None:
+            tf.text = "\n".join(notes_parts)
+    except Exception:
+        pass
+
+
 def _render_slide(
     prs,
     template_type: TemplateType,
@@ -221,6 +253,7 @@ def _render_slide(
     checks if the content can be visualized as an infographic.
 
     VIZ-1: wraps each slide render in error protection.
+    Adds speaker notes to every rendered slide.
     """
     errors: list[str] = []
     slide_num = slide_content.slide_number
@@ -231,29 +264,35 @@ def _render_slide(
 
         if slide_type == SlideType.TITLE:
             render_cover(prs, template_type, slide_content, full_content.title)
+            _add_speaker_notes(prs, slide_content)
             return errors
 
         if slide_type == SlideType.THANK_YOU:
             render_end(prs, template_type, slide_content)
+            _add_speaker_notes(prs, slide_content)
             return errors
 
         if slide_type == SlideType.AGENDA:
             render_agenda(prs, template_type, slide_content, grid, full_content.slides)
+            _add_speaker_notes(prs, slide_content)
             return errors
 
         # Chart slide — has chart_data
         if slide_content.chart_data is not None:
             render_chart(prs, template_type, slide_content, grid)
+            _add_speaker_notes(prs, slide_content)
             return errors
 
         # Table slide — has table_data but no chart
         if slide_content.table_data is not None:
             render_table(prs, template_type, slide_content, grid)
+            _add_speaker_notes(prs, slide_content)
             return errors
 
         # Infographic layouts (comparison, timeline, process) — explicit layout
         if layout in (LayoutType.COMPARISON, LayoutType.TIMELINE, LayoutType.PROCESS):
             render_infographic(prs, template_type, slide_content, grid)
+            _add_speaker_notes(prs, slide_content)
             return errors
 
         # Infographic-first approach: check if bullet content can be visualized
@@ -262,10 +301,12 @@ def _render_slide(
             _render_infographic_first(
                 prs, template_type, slide_content, grid, infographic_type
             )
+            _add_speaker_notes(prs, slide_content)
             return errors
 
         # Default: bullet slide
         render_bullets(prs, template_type, slide_content, grid)
+        _add_speaker_notes(prs, slide_content)
 
     except Exception as exc:
         error_msg = f"Slide {slide_num} ({slide_content.slide_type.value}): render failed — {exc}"

@@ -175,6 +175,8 @@ class MistralClient(LLMClient):
             "model": self.config.model,
             "api_key": self.config.api_key,
             "temperature": self.config.temperature,
+            "timeout": 120,
+            "max_retries": 3,
         }
 
         if self.config.max_output_tokens:
@@ -183,14 +185,17 @@ class MistralClient(LLMClient):
         self.model = ChatMistralAI(**kwargs)
 
     def _invoke_with_backoff(self, call_fn, max_attempts: int = 5):
-        """Invoke with exponential backoff on 429 rate-limit errors."""
+        """Invoke with exponential backoff on 429/capacity errors."""
         import httpx
 
         for attempt in range(max_attempts):
             try:
                 return call_fn()
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429 and attempt < max_attempts - 1:
+            except (httpx.HTTPStatusError, httpx.ReadTimeout) as e:
+                is_retryable = isinstance(e, httpx.ReadTimeout) or (
+                    hasattr(e, 'response') and e.response.status_code in (429, 503)
+                )
+                if is_retryable and attempt < max_attempts - 1:
                     wait_time = min(2 ** attempt * 10, 120)
                     print(f"  [Rate limit] Waiting {wait_time}s before retry {attempt + 2}/{max_attempts}...")
                     time.sleep(wait_time)

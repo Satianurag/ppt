@@ -47,7 +47,7 @@ class LLMConfigLoader:
             "google": "gemini-3.1-flash-lite-preview",
             "openai": "gpt-4o-mini",
             "anthropic": "claude-3-haiku-20240307",
-            "mistral": "mistral-large-2411",
+            "mistral": "mistral-large-latest",
         }
         
         model = os.getenv(cls.ENV_MODEL, default_models.get(provider, "gemini-3.1-flash-lite-preview"))

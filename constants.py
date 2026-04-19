@@ -1,5 +1,8 @@
 """Single source of truth for pipeline-wide constants."""
 
+# Maximum markdown input size (hackathon brief: "Maximum markdown input size is 5 MB")
+MAX_INPUT_SIZE_BYTES: int = 5 * 1024 * 1024  # 5 MB
+
 # Slide budget — configurable per hackathon brief (10-15 range)
 SLIDE_BUDGET: int = 15
 
