@@ -100,6 +100,22 @@ def _add_title_and_subtitle(
         )
 
 
+def _set_uae_title_placeholder(slide, title: str) -> None:
+    """Set the title placeholder (idx=0) on UAE Solar layout slides."""
+    for ph in slide.placeholders:
+        if ph.placeholder_format.idx == 0:
+            ph.text = title
+            break
+
+
+def _add_slide_title(slide, grid: Grid, template_type: TemplateType, title: str, subtitle: str | None = None) -> None:
+    """Add title to a slide — uses placeholder for UAE Solar, textbox for others."""
+    if template_type == TemplateType.UAE_SOLAR:
+        _set_uae_title_placeholder(slide, title)
+    else:
+        _add_title_and_subtitle(slide, grid, title, subtitle)
+
+
 def _add_key_message_footer(slide, grid: Grid, key_message: str) -> None:
     """Add a key message footer at the bottom of a content slide."""
     if not key_message:
@@ -211,9 +227,11 @@ def render_bullets(
     layout = get_layout(prs, template_type, LayoutRole.CONTENT)
     slide = prs.slides.add_slide(layout)
 
-    # For UAE Solar (layout 2 has placeholders), try to use them first
+    # For UAE Solar (layout 2 has placeholders), use placeholders for title/subtitle
+    # but render bullets in a textbox (idx=11 is a tiny unusable footnote area)
     if template_type == TemplateType.UAE_SOLAR:
-        _render_bullets_uae(slide, slide_content)
+        _render_bullets_uae(slide, slide_content, grid)
+        _add_key_message_footer(slide, grid, slide_content.key_message)
         return
 
     _add_title_and_subtitle(slide, grid, slide_content.title, slide_content.subtitle)
@@ -236,23 +254,34 @@ def render_bullets(
     _add_key_message_footer(slide, grid, slide_content.key_message)
 
 
-def _render_bullets_uae(slide, slide_content: SlideContent) -> None:
-    """UAE Solar uses Layout 2 with title/subtitle/body placeholders."""
+def _render_bullets_uae(slide, slide_content: SlideContent, grid: Grid) -> None:
+    """UAE Solar uses Layout 2 placeholders for title/subtitle only.
+
+    placeholder idx=11 is a 0.13"-tall footnote at y=6.74" — unusable for
+    bullet content. Instead, populate title/subtitle placeholders and render
+    bullets in a programmatic textbox in the safe content area.
+    """
     for ph in slide.placeholders:
         idx = ph.placeholder_format.idx
         if idx == 0:  # Title
             ph.text = slide_content.title
         elif idx == 2:  # Subtitle
             ph.text = slide_content.subtitle or ""
-        elif idx == 11:  # Body
-            bullets = _get_bullet_texts(slide_content)
-            ph.text = ""
-            tf = ph.text_frame
-            for i, bullet_text in enumerate(bullets):
-                p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-                p.text = f"• {bullet_text}"
-                p.font.size = BODY_FONT_SIZE
-                p.space_after = Pt(8)
+
+    # Render bullets in a textbox (not in the tiny idx=11 footnote placeholder)
+    bullets = _get_bullet_texts(slide_content)
+    if bullets:
+        txBox = slide.shapes.add_textbox(
+            grid.content_left, grid.content_top,
+            grid.content_width, grid.content_height,
+        )
+        tf = txBox.text_frame
+        tf.word_wrap = True
+        for i, bullet_text in enumerate(bullets):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            p.text = f"• {bullet_text}"
+            p.font.size = BODY_FONT_SIZE
+            p.space_after = Pt(8)
 
 
 def _get_bullet_texts(slide_content: SlideContent) -> list[str]:
@@ -293,58 +322,47 @@ def render_chart(
     layout = get_layout(prs, template_type, LayoutRole.CONTENT)
     slide = prs.slides.add_slide(layout)
 
-    if template_type != TemplateType.UAE_SOLAR:
-        _add_title_and_subtitle(slide, grid, slide_content.title)
+    _add_slide_title(slide, grid, template_type, slide_content.title)
 
-        chart_pptx_data = CategoryChartData()
-        chart_pptx_data.categories = chart_data_model.categories
+    # Chart creation — shared across all templates
+    chart_pptx_data = CategoryChartData()
+    chart_pptx_data.categories = chart_data_model.categories
+    for series_dict in chart_data_model.series:
+        chart_pptx_data.add_series(series_dict["name"], series_dict["values"])
 
-        for series_dict in chart_data_model.series:
-            chart_pptx_data.add_series(
-                series_dict["name"],
-                series_dict["values"],
-            )
-
-        xl_type = CHART_TYPE_MAP.get(chart_data_model.chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
-
-        chart_shape = slide.shapes.add_chart(
-            xl_type,
-            grid.chart_left, grid.chart_top,
-            grid.chart_width, grid.chart_height,
-            chart_pptx_data,
-        )
-
-        _style_chart(chart_shape.chart, chart_data_model)
-        _add_key_message_footer(slide, grid, slide_content.key_message)
-    else:
-        # UAE Solar: use placeholders for title, add chart in content area
-        for ph in slide.placeholders:
-            if ph.placeholder_format.idx == 0:
-                ph.text = slide_content.title
-
-        chart_pptx_data = CategoryChartData()
-        chart_pptx_data.categories = chart_data_model.categories
-        for series_dict in chart_data_model.series:
-            chart_pptx_data.add_series(series_dict["name"], series_dict["values"])
-
-        xl_type = CHART_TYPE_MAP.get(chart_data_model.chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
-        chart_shape = slide.shapes.add_chart(
-            xl_type,
-            grid.chart_left, grid.chart_top,
-            grid.chart_width, grid.chart_height,
-            chart_pptx_data,
-        )
-        _style_chart(chart_shape.chart, chart_data_model)
+    xl_type = CHART_TYPE_MAP.get(chart_data_model.chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
+    chart_shape = slide.shapes.add_chart(
+        xl_type,
+        grid.chart_left, grid.chart_top,
+        grid.chart_width, grid.chart_height,
+        chart_pptx_data,
+    )
+    _style_chart(chart_shape.chart, chart_data_model)
+    _add_key_message_footer(slide, grid, slide_content.key_message)
 
 
 def _style_chart(chart, chart_data_model: ChartData) -> None:
-    """Apply theme colors and formatting to a chart."""
+    """Apply theme colors and formatting to a chart.
+
+    Pie/donut charts have ONE series with multiple data points — must color
+    individual points, not the series. Bar/line charts color per series.
+    """
     chart.has_legend = chart_data_model.show_legend
 
-    # Assign theme accent colors per series (CRITICAL: not auto-inherited)
-    for i, series in enumerate(chart.series):
-        series.format.fill.solid()
-        series.format.fill.fore_color.theme_color = get_accent_color(i)
+    is_single_series_chart = chart_data_model.chart_type in (ChartType.PIE, ChartType.DONUT)
+
+    if is_single_series_chart:
+        # Pie/donut: color each data point (slice) individually
+        series = chart.series[0]
+        for i in range(len(chart_data_model.categories)):
+            point = series.points[i]
+            point.format.fill.solid()
+            point.format.fill.fore_color.theme_color = get_accent_color(i)
+    else:
+        # Bar/line/grouped: color each series
+        for i, series in enumerate(chart.series):
+            series.format.fill.solid()
+            series.format.fill.fore_color.theme_color = get_accent_color(i)
 
     if chart_data_model.show_data_labels:
         plot = chart.plots[0]
@@ -365,8 +383,7 @@ def _render_stat_card(
     layout = get_layout(prs, template_type, LayoutRole.CONTENT)
     slide = prs.slides.add_slide(layout)
 
-    if template_type != TemplateType.UAE_SOLAR:
-        _add_title_and_subtitle(slide, grid, slide_content.title)
+    _add_slide_title(slide, grid, template_type, slide_content.title)
 
     # Render each data point as a large number with label
     if chart_data_model.series and chart_data_model.categories:
@@ -418,8 +435,7 @@ def render_table(
     layout = get_layout(prs, template_type, LayoutRole.CONTENT)
     slide = prs.slides.add_slide(layout)
 
-    if template_type != TemplateType.UAE_SOLAR:
-        _add_title_and_subtitle(slide, grid, slide_content.title)
+    _add_slide_title(slide, grid, template_type, slide_content.title)
 
     rows = len(table_data.rows) + 1  # +1 for header
     cols = len(table_data.headers)
@@ -506,6 +522,8 @@ def render_infographic(
         _render_comparison(prs, template_type, slide_content, grid)
     elif slide_content.layout == LayoutType.TIMELINE:
         _render_timeline(prs, template_type, slide_content, grid)
+    elif slide_content.layout == LayoutType.PROCESS:
+        _render_process_flow(prs, template_type, slide_content, grid)
     else:
         _render_process_flow(prs, template_type, slide_content, grid)
 
@@ -520,8 +538,7 @@ def _render_process_flow(
     layout = get_layout(prs, template_type, LayoutRole.CONTENT)
     slide = prs.slides.add_slide(layout)
 
-    if template_type != TemplateType.UAE_SOLAR:
-        _add_title_and_subtitle(slide, grid, slide_content.title)
+    _add_slide_title(slide, grid, template_type, slide_content.title)
 
     bullets = _get_bullet_texts(slide_content)
     n = min(len(bullets), 5)  # Max 5 steps in process flow
@@ -565,8 +582,7 @@ def _render_comparison(
     layout = get_layout(prs, template_type, LayoutRole.CONTENT)
     slide = prs.slides.add_slide(layout)
 
-    if template_type != TemplateType.UAE_SOLAR:
-        _add_title_and_subtitle(slide, grid, slide_content.title)
+    _add_slide_title(slide, grid, template_type, slide_content.title)
 
     bullets = _get_bullet_texts(slide_content)
     mid = len(bullets) // 2
@@ -610,8 +626,7 @@ def _render_timeline(
     layout = get_layout(prs, template_type, LayoutRole.CONTENT)
     slide = prs.slides.add_slide(layout)
 
-    if template_type != TemplateType.UAE_SOLAR:
-        _add_title_and_subtitle(slide, grid, slide_content.title)
+    _add_slide_title(slide, grid, template_type, slide_content.title)
 
     bullets = _get_bullet_texts(slide_content)
     n = min(len(bullets), 6)
@@ -665,9 +680,9 @@ def render_agenda(
     layout = get_layout(prs, template_type, LayoutRole.CONTENT)
     slide = prs.slides.add_slide(layout)
 
-    if template_type != TemplateType.UAE_SOLAR:
-        _add_title_and_subtitle(slide, grid, "Agenda")
+    _add_slide_title(slide, grid, template_type, "Agenda")
 
+    if template_type != TemplateType.UAE_SOLAR:
         txBox = slide.shapes.add_textbox(
             grid.content_left, grid.content_top,
             grid.content_width, grid.content_height,
@@ -685,39 +700,22 @@ def render_agenda(
             p.font.size = Pt(18)
             p.space_after = Pt(6)
     else:
-        for ph in slide.placeholders:
-            if ph.placeholder_format.idx == 0:
-                ph.text = "Agenda"
-            elif ph.placeholder_format.idx == 11:
-                section_titles = [
-                    s.title for s in all_slides
-                    if s.slide_type not in (SlideType.TITLE, SlideType.AGENDA, SlideType.THANK_YOU)
-                ]
-                ph.text = ""
-                tf = ph.text_frame
-                for i, title in enumerate(section_titles):
-                    p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-                    p.text = f"{i + 1}.  {title}"
-                    p.font.size = Pt(18)
-                    p.space_after = Pt(6)
+        # UAE Solar: title already set by _add_slide_title; render agenda items in textbox
+        section_titles = [
+            s.title for s in all_slides
+            if s.slide_type not in (SlideType.TITLE, SlideType.AGENDA, SlideType.THANK_YOU)
+        ]
+        if section_titles:
+            txBox = slide.shapes.add_textbox(
+                grid.content_left, grid.content_top,
+                grid.content_width, grid.content_height,
+            )
+            tf = txBox.text_frame
+            tf.word_wrap = True
+            for i, title in enumerate(section_titles):
+                p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+                p.text = f"{i + 1}.  {title}"
+                p.font.size = Pt(18)
+                p.space_after = Pt(6)
 
 
-# ── Divider slide ────────────────────────────────────────────────────
-
-def render_divider(
-    prs: Presentation,
-    template_type: TemplateType,
-    title: str,
-) -> None:
-    """Render a section divider slide using the template's divider layout."""
-    layout = get_layout(prs, template_type, LayoutRole.DIVIDER)
-    slide = prs.slides.add_slide(layout)
-
-    # Divider layouts have a single text placeholder
-    for ph in slide.placeholders:
-        idx = ph.placeholder_format.idx
-        if idx in (0, 10):
-            ph.text = title
-            for p in ph.text_frame.paragraphs:
-                p.font.size = TITLE_FONT_SIZE
-            break

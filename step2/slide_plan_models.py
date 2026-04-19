@@ -30,6 +30,7 @@ class LayoutType(str, Enum):
     TWO_COLUMN = "two_column"
     COMPARISON = "comparison"
     TIMELINE = "timeline"
+    PROCESS = "process"
 
 
 class ChartType(str, Enum):
