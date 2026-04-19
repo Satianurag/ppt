@@ -147,6 +147,16 @@ def run_langgraph_pipeline(
     Returns:
         Completed PipelineState with pptx_path, quality_score, etc.
     """
+    from pathlib import Path as _Path
+    from constants import MAX_INPUT_SIZE_BYTES
+    file_size = _Path(markdown_path).stat().st_size
+    if file_size > MAX_INPUT_SIZE_BYTES:
+        size_mb = file_size / (1024 * 1024)
+        raise ValueError(
+            f"Input file is {size_mb:.1f} MB — exceeds the 5 MB maximum. "
+            f"Please reduce the file size before processing."
+        )
+
     graph = build_pipeline_graph()
     app = graph.compile()
 

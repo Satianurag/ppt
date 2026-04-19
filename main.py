@@ -17,12 +17,24 @@ import os
 import sys
 from pathlib import Path
 
+from constants import MAX_INPUT_SIZE_BYTES
 from step1 import MarkdownParser
 from step2 import ContentTriageAgent
 from step3 import ContentExtractor
 from step3.content_models import PresentationContent
 from step4 import build_presentation
 from llm import get_llm_client
+
+
+def _validate_input_size(markdown_path: str) -> None:
+    """Raise ValueError if markdown file exceeds 5 MB limit."""
+    file_size = Path(markdown_path).stat().st_size
+    if file_size > MAX_INPUT_SIZE_BYTES:
+        size_mb = file_size / (1024 * 1024)
+        raise ValueError(
+            f"Input file is {size_mb:.1f} MB — exceeds the 5 MB maximum. "
+            f"Please reduce the file size before processing."
+        )
 
 
 def process_markdown_to_presentation(
@@ -43,6 +55,8 @@ def process_markdown_to_presentation(
     Returns:
         Tuple of (PresentationContent, pptx_path or None).
     """
+    _validate_input_size(markdown_path)
+
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -115,6 +129,8 @@ def run_multi_agent(
     Returns:
         PipelineState with all results.
     """
+    _validate_input_size(markdown_path)
+
     from agents import CoordinatorAgent
 
     coordinator = CoordinatorAgent(
