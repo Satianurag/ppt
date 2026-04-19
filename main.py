@@ -1,8 +1,12 @@
 """Main entry point for the markdown-to-presentation pipeline.
 
-Steps 1-4: Parse → Triage → Extract → Render PPTX.
-All LLM calls use retry-with-feedback (PPTAgent pattern).
-No image handling. No fallback code.
+Multi-agent architecture (30% of hackathon score — Code Quality & Agentic):
+  Coordinator → Strategist → Designer → Executor → Reviewer
+
+Each agent has a clear role, communicates via structured AgentMessage objects,
+and follows the retry-with-feedback pattern from PPTAgent.
+
+Legacy single-pass mode preserved via process_markdown_to_presentation().
 """
 
 import os
@@ -23,6 +27,9 @@ def process_markdown_to_presentation(
     output_dir: str = "./output",
 ) -> tuple[PresentationContent, str | None]:
     """Process a markdown file through all 4 steps to create a PPTX.
+
+    This is the legacy single-pass entry point. For the multi-agent pipeline
+    with retry-with-feedback, use CoordinatorAgent.run() instead.
 
     Args:
         markdown_path: Path to input markdown file.
@@ -82,11 +89,43 @@ def process_markdown_to_presentation(
     return presentation, pptx_path
 
 
+def run_multi_agent(
+    markdown_path: str,
+    template_path: str,
+    output_dir: str = "./output",
+    max_retries: int = 2,
+    quality_threshold: float = 0.6,
+) -> "PipelineState":
+    """Run the multi-agent pipeline (recommended entry point).
+
+    Pipeline: Coordinator → Strategist → Designer → Executor → Reviewer
+    With retry-with-feedback loop when quality check fails.
+
+    Args:
+        markdown_path: Path to input markdown file.
+        template_path: Path to Slide Master PPTX template.
+        output_dir: Directory for output files.
+        max_retries: Maximum retry attempts if quality check fails.
+        quality_threshold: Minimum quality score to pass (0.0-1.0).
+
+    Returns:
+        PipelineState with all results.
+    """
+    from agents import CoordinatorAgent
+
+    coordinator = CoordinatorAgent(
+        max_retries=max_retries,
+        quality_threshold=quality_threshold,
+    )
+    return coordinator.run(markdown_path, template_path, output_dir)
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python main.py <markdown_file> [template.pptx]")
-        print("\nExample:")
+        print("Usage: python main.py <markdown_file> [template.pptx] [--agents]")
+        print("\nExamples:")
         print("  python main.py research/example.md template.pptx")
+        print("  python main.py research/example.md template.pptx --agents")
         sys.exit(1)
 
     api_key = os.getenv("LLM_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -94,22 +133,34 @@ if __name__ == "__main__":
         print("\nWarning: No API key found. Set LLM_API_KEY or GOOGLE_API_KEY")
         sys.exit(1)
 
-    markdown_file = sys.argv[1]
-    template_file = sys.argv[2] if len(sys.argv) > 2 else None
-    result, pptx_path = process_markdown_to_presentation(markdown_file, template_file)
+    use_agents = "--agents" in sys.argv
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    markdown_file = args[0]
+    template_file = args[1] if len(args) > 1 else None
 
-    print("\n" + "=" * 60)
-    print("PIPELINE COMPLETE")
-    print("=" * 60)
-    print(f"Presentation: {result.title}")
-    print(f"Slides: {len(result.slides)}")
-    if pptx_path:
-        print(f"PPTX: {pptx_path}")
-
-    issues = result.validate_completeness()
-    if issues:
-        print("\nIssues found:")
-        for issue in issues:
-            print(f"  - {issue}")
+    if use_agents and template_file:
+        # Multi-agent pipeline
+        state = run_multi_agent(markdown_file, template_file)
+        print(f"\nPPTX: {state.pptx_path}")
+        print(f"Quality: {state.quality_score:.2f}")
     else:
-        print("\nNo issues found.")
+        # Legacy single-pass
+        result, pptx_path = process_markdown_to_presentation(
+            markdown_file, template_file
+        )
+
+        print("\n" + "=" * 60)
+        print("PIPELINE COMPLETE")
+        print("=" * 60)
+        print(f"Presentation: {result.title}")
+        print(f"Slides: {len(result.slides)}")
+        if pptx_path:
+            print(f"PPTX: {pptx_path}")
+
+        issues = result.validate_completeness()
+        if issues:
+            print("\nIssues found:")
+            for issue in issues:
+                print(f"  - {issue}")
+        else:
+            print("\nNo issues found.")

@@ -21,6 +21,7 @@ from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.util import Inches, Pt, Emu
 
 from step4.font_sizing import auto_font_size_pt, auto_font_size_aggressive
+from step4.icon_manager import embed_icon, get_icon_for_category, ICON_CATEGORIES
 from step4.theme import get_accent_color
 
 
@@ -617,9 +618,11 @@ def render_matrix_2x2(slide, grid, quadrants: list[dict], template_type=None) ->
 # Inspired by PPT Master: icon_grid.svg
 
 def render_icon_grid(slide, grid, items: list[dict], template_type=None) -> None:
-    """Render an icon-style grid (using emoji/text as icon substitute).
+    """Render an icon-style grid using PPT Master's 640 chunk icons.
 
-    Items: [{"icon": str, "title": str, "description": str?}, ...]
+    Items: [{"icon": str, "title": str, "description": str?, "category": str?}, ...]
+    Icons are rendered as native python-pptx freeform shapes (DrawingML),
+    NOT embedded images — fully editable in PowerPoint.
     """
     n = len(items)
     if n == 0:
@@ -646,15 +649,13 @@ def render_icon_grid(slide, grid, items: list[dict], template_type=None) -> None
         left = grid.content_left + int(col * (card_width + col_gap))
         top = grid.content_top + int(row * (card_height + row_gap))
 
-        # Icon (text substitute — large character)
-        icon = item.get("icon", "●")
-        _add_shaped_textbox(
-            slide, left, top, card_width, Inches(0.6),
-            icon, Pt(28), bold=True,
-            fill_color=None,
-            font_color=_accent_rgb(idx),
-            shape_type=MSO_SHAPE.RECTANGLE,
-        )
+        # Icon — use real PPT Master chunk icons (native DrawingML shapes)
+        category = item.get("category", "check")
+        icon_name = item.get("icon", get_icon_for_category(category))
+        icon_size = Inches(0.5)
+        icon_left = left + int((card_width - icon_size) / 2)
+        accent = _accent_rgb(idx)
+        embed_icon(slide, icon_name, icon_left, top + Inches(0.05), icon_size, accent)
 
         # Title
         title = item.get("title", "")
