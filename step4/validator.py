@@ -38,7 +38,7 @@ MIN_FONT_SIZE_PT = 10
 MIN_SLIDE_COUNT = 10
 MAX_SLIDE_COUNT = 15
 MIN_CONTENT_WORDS = 5
-MIN_SPACE_USAGE_RATIO = 0.25
+MIN_SPACE_USAGE_RATIO = 0.40  # Common Mistakes: shapes must fill ≥40% of safe area
 
 
 def validate_presentation(prs: Presentation) -> list[str]:
@@ -69,6 +69,20 @@ def validate_presentation(prs: Presentation) -> list[str]:
     # Rule 8: Maximum slide count
     if slide_count > MAX_SLIDE_COUNT:
         issues.append(f"{slide_count} slides exceeds maximum {MAX_SLIDE_COUNT}.")
+
+    # Rule 17: Chart type diversity (Fix 11 — Issue 3.2)
+    chart_types: list[str] = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.has_chart:
+                chart_types.append(shape.chart.chart_type.__str__())
+    if len(chart_types) >= 2:
+        unique_chart_types = set(chart_types)
+        if len(unique_chart_types) == 1:
+            issues.append(
+                f"All {len(chart_types)} charts use the same type ({chart_types[0]}) — "
+                f"vary chart types for visual interest"
+            )
 
     return issues
 

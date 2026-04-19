@@ -90,17 +90,74 @@ INFOGRAPHIC_KEYWORDS: dict[str, str] = {
 }
 
 
+_ICON_KEYWORD_MAP: dict[str, str] = {
+    "revenue": "finance", "profit": "finance", "cost": "finance", "budget": "finance",
+    "growth": "growth", "increase": "growth", "rise": "growth", "expand": "growth",
+    "decline": "decline", "decrease": "decline", "drop": "decline", "fall": "decline",
+    "time": "time", "schedule": "time", "deadline": "time",
+    "target": "target", "goal": "target", "objective": "target",
+    "team": "people", "employee": "people", "staff": "people", "workforce": "people",
+    "security": "shield", "protect": "shield", "safe": "shield",
+    "global": "globe", "international": "globe", "world": "globe",
+    "innovation": "lightbulb", "idea": "lightbulb", "creative": "lightbulb",
+    "data": "database", "analytics": "chart_line", "metric": "chart_line",
+    "cloud": "cloud", "infrastructure": "building", "technology": "code",
+    "strategy": "target", "plan": "calendar", "launch": "rocket",
+}
+
+
+def _infer_icon_category(text: str) -> str:
+    """Infer an icon category from bullet text using keyword matching."""
+    lower = text.lower()
+    for keyword, category in _ICON_KEYWORD_MAP.items():
+        if keyword in lower:
+            return category
+    return "check"
+
+
+# Minimum bullet count required for each infographic type (Fix 12)
+_MIN_ITEMS_FOR_INFOGRAPHIC: dict[str, int] = {
+    "timeline": 2,
+    "comparison_columns": 2,
+    "numbered_steps": 2,
+    "kpi_cards": 2,
+    "funnel": 2,
+    "pyramid": 2,
+    "hub_spoke": 2,
+    "cycle_diagram": 3,
+    "vertical_list": 2,
+    "pros_cons": 2,
+    "matrix_2x2": 4,
+    "icon_grid": 2,
+}
+
+
 def _detect_infographic_type(slide_content: SlideContent) -> str | None:
     """Infographic-first approach: check if content should be visualized.
 
     Returns the infographic type name or None for regular bullet rendering.
     Per research docs (hackathon_research.md:68-69): "Before placing text,
     ask: Can this be visualized?"
+
+    Fix 12: Guards against triggering infographics when there aren't
+    enough bullets to render them properly.
     """
     text = f"{slide_content.title} {slide_content.key_message}".lower()
 
+    # Count available bullets before deciding
+    bullets = getattr(slide_content, 'bullets', None)
+    key_points = getattr(slide_content, 'key_points', None)
+    bullet_count = len(bullets) if bullets else 0
+    if key_points:
+        bullet_count = max(bullet_count, len(key_points))
+
     for keyword, infographic_type in INFOGRAPHIC_KEYWORDS.items():
         if keyword in text:
+            # Only enforce minimum if we can actually count bullets
+            if bullet_count > 0:
+                min_items = _MIN_ITEMS_FOR_INFOGRAPHIC.get(infographic_type, 2)
+                if bullet_count < min_items:
+                    return None
             return infographic_type
 
     return None
@@ -237,28 +294,32 @@ def _render_infographic_first(
 
     bullets = _get_bullet_texts(slide_content)
 
-    # Convert bullet texts to items format expected by infographic renderers
-    items = [{"title": b, "description": "", "label": b} for b in bullets]
+    # Build structured items from bullet text (Fix 7: richer data conversion)
+    step_items = _bullets_to_steps(bullets)
+    kpi_items = _bullets_to_kpis(bullets)
+    timeline_items = _bullets_to_timeline(bullets)
 
     renderer_map = {
-        "timeline": lambda: render_timeline(slide, grid, items),
+        "timeline": lambda: render_timeline(slide, grid, timeline_items),
         "comparison_columns": lambda: render_comparison_columns(
             slide, grid,
-            [{"title": f"Option {i+1}", "points": [b]} for i, b in enumerate(bullets)]
+            [{"title": _split_title(b), "points": [_split_desc(b)]}
+             for b in bullets]
         ),
-        "numbered_steps": lambda: render_numbered_steps(slide, grid, items),
-        "kpi_cards": lambda: render_kpi_cards(
+        "numbered_steps": lambda: render_numbered_steps(slide, grid, step_items),
+        "kpi_cards": lambda: render_kpi_cards(slide, grid, kpi_items),
+        "funnel": lambda: render_funnel(
             slide, grid,
-            [{"value": str(i+1), "label": b} for i, b in enumerate(bullets)]
+            [{"label": _split_title(b), "value": _extract_number(b)}
+             for b in bullets]
         ),
-        "funnel": lambda: render_funnel(slide, grid, items),
         "pyramid": lambda: render_pyramid(slide, grid, bullets),
         "hub_spoke": lambda: render_hub_spoke(
             slide, grid, bullets[0] if bullets else "Center",
             bullets[1:] if len(bullets) > 1 else bullets
         ),
         "cycle_diagram": lambda: render_cycle_diagram(slide, grid, bullets),
-        "vertical_list": lambda: render_vertical_list(slide, grid, items),
+        "vertical_list": lambda: render_vertical_list(slide, grid, step_items),
         "pros_cons": lambda: render_pros_cons(
             slide, grid,
             bullets[:len(bullets)//2],
@@ -270,7 +331,8 @@ def _render_infographic_first(
         ),
         "icon_grid": lambda: render_icon_grid(
             slide, grid,
-            [{"icon": "●", "title": b, "description": ""} for b in bullets]
+            [{"title": b, "description": "",
+              "category": _infer_icon_category(b)} for b in bullets]
         ),
     }
 
@@ -296,3 +358,59 @@ def _render_infographic_first(
             p.space_after = Pt(8)
 
     _add_key_message_footer(slide, grid, slide_content.key_message)
+
+
+# ── Bullet-to-structured-data helpers (Fix 7) ────────────────────────
+
+import re as _re
+
+
+def _split_title(text: str) -> str:
+    """Extract the title portion from a bullet (before colon/dash/period)."""
+    for sep in (":", " – ", " — ", " - "):
+        if sep in text:
+            return text.split(sep, 1)[0].strip()
+    words = text.split()
+    return " ".join(words[:5]) if len(words) > 5 else text
+
+
+def _split_desc(text: str) -> str:
+    """Extract the description portion from a bullet (after colon/dash)."""
+    for sep in (":", " – ", " — ", " - "):
+        if sep in text:
+            return text.split(sep, 1)[1].strip()
+    return text
+
+
+def _extract_number(text: str) -> str:
+    """Extract the first number (with optional %, $, unit) from text."""
+    m = _re.search(r'[\$]?[\d,]+\.?\d*\s*[%$BMKbmk]?', text)
+    return m.group(0).strip() if m else ""
+
+
+def _bullets_to_steps(bullets: list[str]) -> list[dict]:
+    """Convert bullet texts to numbered-step items with title + description."""
+    return [
+        {"title": _split_title(b), "description": _split_desc(b)}
+        for b in bullets
+    ]
+
+
+def _bullets_to_kpis(bullets: list[str]) -> list[dict]:
+    """Convert bullet texts to KPI card items with value + label."""
+    items = []
+    for b in bullets:
+        value = _extract_number(b)
+        label = _split_title(b) if value else b
+        if not value:
+            value = "—"
+        items.append({"value": value, "label": label})
+    return items
+
+
+def _bullets_to_timeline(bullets: list[str]) -> list[dict]:
+    """Convert bullet texts to timeline items with label + description."""
+    return [
+        {"label": _split_title(b), "description": _split_desc(b)}
+        for b in bullets
+    ]

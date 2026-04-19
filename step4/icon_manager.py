@@ -26,6 +26,8 @@ from pptx.util import Emu, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 
+from step4.theme import apply_accent_fill, get_accent_color
+
 
 # Icon library path (relative to project root)
 ICON_DIR = Path(__file__).parent.parent / "assets" / "icons" / "chunk"
@@ -157,11 +159,15 @@ def embed_icon(
     top: int,
     size: int,
     color: RGBColor | None = None,
+    accent_index: int = 0,
 ) -> bool:
     """Embed an icon as a native python-pptx shape on a slide.
 
     For simple rectangular icons, renders as MSO_SHAPE. For complex paths,
     falls back to a colored rectangle placeholder with the icon category initial.
+
+    Uses theme accent colors by default. Pass `color` to override with
+    a specific RGB value.
 
     Args:
         slide: python-pptx slide object.
@@ -169,18 +175,16 @@ def embed_icon(
         left: Left position in EMU.
         top: Top position in EMU.
         size: Width and height in EMU (icons are square).
-        color: Fill color. Defaults to accent blue.
+        color: Explicit fill color override. If None, uses theme accent.
+        accent_index: Theme accent index (0-5). Only used when color is None.
 
     Returns:
         True if icon was successfully embedded.
     """
-    if color is None:
-        color = RGBColor(0x00, 0x76, 0xA8)
-
     # Try to render as native shape
     paths = _parse_svg_paths(icon_name)
     if not paths:
-        _add_fallback_shape(slide, icon_name, left, top, size, color)
+        _add_fallback_shape(slide, icon_name, left, top, size, color, accent_index)
         return True
 
     vb = _get_viewbox(icon_name)
@@ -193,9 +197,9 @@ def embed_icon(
     )
 
     if all_simple and len(paths) <= 4:
-        _render_freeform_icon(slide, paths, left, top, size, vb_w, vb_h, color)
+        _render_freeform_icon(slide, paths, left, top, size, vb_w, vb_h, color, accent_index)
     else:
-        _add_fallback_shape(slide, icon_name, left, top, size, color)
+        _add_fallback_shape(slide, icon_name, left, top, size, color, accent_index)
 
     return True
 
@@ -208,7 +212,8 @@ def _render_freeform_icon(
     size: int,
     vb_w: float,
     vb_h: float,
-    color: RGBColor,
+    color: RGBColor | None = None,
+    accent_index: int = 0,
 ) -> None:
     """Render SVG paths as a python-pptx freeform shape."""
     from pptx.util import Emu
@@ -297,8 +302,11 @@ def _render_freeform_icon(
 
         if started:
             shape = builder.convert_to_shape()
-            shape.fill.solid()
-            shape.fill.fore_color.rgb = color
+            if color is not None:
+                shape.fill.solid()
+                shape.fill.fore_color.rgb = color
+            else:
+                apply_accent_fill(shape, accent_index)
             shape.line.fill.background()
 
 
@@ -308,14 +316,18 @@ def _add_fallback_shape(
     left: int,
     top: int,
     size: int,
-    color: RGBColor,
+    color: RGBColor | None = None,
+    accent_index: int = 0,
 ) -> None:
     """Add a simple circle with initial letter as fallback for complex icons."""
     shape = slide.shapes.add_shape(
         MSO_SHAPE.OVAL, left, top, size, size,
     )
-    shape.fill.solid()
-    shape.fill.fore_color.rgb = color
+    if color is not None:
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = color
+    else:
+        apply_accent_fill(shape, accent_index)
     shape.line.fill.background()
 
     # Add initial letter

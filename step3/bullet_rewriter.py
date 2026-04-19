@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from .content_models import ExtractedBullet, KeyPoint
 from .markdown_reparser import SectionContent
 from llm import LLMClient, StructuredLLMClient
-from constants import MAX_BULLETS_PER_SLIDE, MAX_WORDS_PER_BULLET, MAX_BULLET_CHARS
+from constants import MAX_BULLETS_PER_SLIDE, MAX_WORDS_PER_BULLET, MAX_BULLET_CHARS, VERBOSITY_RULES, DEFAULT_VERBOSITY
 
 
 class BulletRewriteOutput(BaseModel):
@@ -77,8 +77,27 @@ class BulletRewriter:
         max_bullets: int = MAX_BULLETS_PER_SLIDE,
         max_words_per_bullet: int = MAX_WORDS_PER_BULLET,
         target_audience: str = "executive",
+        feedback_context: str = "",
+        verbosity: str = DEFAULT_VERBOSITY,
     ) -> List[ExtractedBullet]:
-        """Transform source text into optimized bullets using LLM."""
+        """Transform source text into optimized bullets using LLM.
+
+        Args:
+            feedback_context: Reviewer feedback from a previous attempt.
+                Injected into the prompt so the LLM can correct prior issues
+                (PPTAgent retry-with-feedback pattern).
+            verbosity: One of 'concise', 'normal', 'detailed'. Controls
+                bullet count and length per SlidesAI rules.
+        """
+        feedback_block = ""
+        if feedback_context:
+            feedback_block = (
+                f"\nPREVIOUS ATTEMPT FEEDBACK (fix these issues):\n"
+                f"{feedback_context}\n"
+            )
+
+        verbosity_instruction = VERBOSITY_RULES.get(verbosity, VERBOSITY_RULES[DEFAULT_VERBOSITY])
+
         prompt = f"""Transform the following content into high-impact presentation bullets.
 
 SOURCE CONTENT:
@@ -86,6 +105,8 @@ SOURCE CONTENT:
 
 KEY MESSAGE (what this slide must convey):
 {key_message}
+{feedback_block}
+VERBOSITY MODE: {verbosity_instruction}
 
 REQUIREMENTS:
 - Generate {max_bullets} bullets maximum
@@ -131,8 +152,13 @@ Make every word count. Be concise and impactful."""
         merge_reasoning: str,
         max_bullets: int = MAX_BULLETS_PER_SLIDE,
         max_words_per_bullet: int = MAX_WORDS_PER_BULLET,
+        feedback_context: str = "",
     ) -> List[ExtractedBullet]:
-        """Synthesize multiple sections into coherent bullets."""
+        """Synthesize multiple sections into coherent bullets.
+
+        Args:
+            feedback_context: Reviewer feedback from a previous attempt.
+        """
         sections_context = []
         source_section_ids = []
 
@@ -145,6 +171,13 @@ Make every word count. Be concise and impactful."""
 
         combined_context = "\n---\n".join(sections_context)
 
+        feedback_block = ""
+        if feedback_context:
+            feedback_block = (
+                f"\nPREVIOUS ATTEMPT FEEDBACK (fix these issues):\n"
+                f"{feedback_context}\n"
+            )
+
         prompt = f"""Synthesize multiple content sections into a coherent slide.
 
 SECTIONS TO MERGE:
@@ -155,6 +188,7 @@ MERGE REASONING:
 
 KEY MESSAGE (unified takeaway):
 {key_message}
+{feedback_block}
 
 REQUIREMENTS:
 - Create {max_bullets} unified bullets

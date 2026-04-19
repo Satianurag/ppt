@@ -273,12 +273,19 @@ def _render_bullets_uae(slide, slide_content: SlideContent, grid: Grid) -> None:
         elif idx == 2:  # Subtitle
             ph.text = slide_content.subtitle or ""
 
-    # Render bullets in a textbox with auto font sizing
+    # Render bullets using proportional space filling (3C)
     bullets = _get_bullet_texts(slide_content)
     if bullets:
+        # Use proportional_fill to size the textbox to actual content
+        # instead of always using the full 5.3" content height
+        n_bullets = len(bullets)
+        line_height_in = 0.5  # ~Pt(16) + spacing
+        needed_height = max(Inches(1.5), Inches(n_bullets * line_height_in))
+        actual_height = min(needed_height, grid.content_height)
+
         txBox = slide.shapes.add_textbox(
             grid.content_left, grid.content_top,
-            grid.content_width, grid.content_height,
+            grid.content_width, actual_height,
         )
         tf = txBox.text_frame
         tf.word_wrap = True
@@ -294,12 +301,19 @@ def _render_bullets_uae(slide, slide_content: SlideContent, grid: Grid) -> None:
 def _get_bullet_texts(slide_content: SlideContent) -> list[str]:
     """Extract bullet text from either bullets or key_points.
 
+    Bullets are sorted by priority (highest first) so the most important
+    content appears at the top of each slide (Fix 9: priority-based selection).
+
     Uses paragraph_form for slides with ≤3 key points (more detail/context),
     bullet_form for slides with >3 key points (concise).
-    This implements PARTIAL-4: actually USE paragraph_form from KeyPoint.
     """
     if slide_content.bullets:
-        return [b.text for b in slide_content.bullets]
+        sorted_bullets = sorted(
+            slide_content.bullets,
+            key=lambda b: b.priority,
+            reverse=True,
+        )
+        return [b.text for b in sorted_bullets]
     if slide_content.key_points:
         if len(slide_content.key_points) <= 3:
             return [kp.paragraph_form for kp in slide_content.key_points]
@@ -531,161 +545,39 @@ def render_infographic(
     slide_content: SlideContent,
     grid: Grid,
 ) -> None:
-    """Render infographic slides using MSO_SHAPE shapes.
+    """Render infographic slides — delegates to infographic_renderers.
 
-    Uses chevrons for process flows (VIZ-7: renders consistently across viewers).
+    Fix 13: Consolidated duplicate renderers. The infographic_renderers
+    module has richer, theme-aware versions of timeline/comparison/process.
     """
+    from step4.infographic_renderers import (
+        render_timeline as _ir_timeline,
+        render_comparison_columns as _ir_comparison,
+        render_numbered_steps as _ir_steps,
+    )
+
+    layout_obj = get_layout(prs, template_type, LayoutRole.CONTENT)
+    slide = prs.slides.add_slide(layout_obj)
+    _add_slide_title(slide, grid, template_type, slide_content.title)
+
+    bullets = _get_bullet_texts(slide_content)
+    items = [{"title": b, "description": "", "label": b} for b in bullets]
+
     if slide_content.layout == LayoutType.COMPARISON:
-        _render_comparison(prs, template_type, slide_content, grid)
+        cols = [{"title": f"Option {i+1}", "points": [b]} for i, b in enumerate(bullets)]
+        _ir_comparison(slide, grid, cols)
     elif slide_content.layout == LayoutType.TIMELINE:
-        _render_timeline(prs, template_type, slide_content, grid)
+        _ir_timeline(slide, grid, items)
     elif slide_content.layout == LayoutType.PROCESS:
-        _render_process_flow(prs, template_type, slide_content, grid)
+        _ir_steps(slide, grid, items)
     else:
-        _render_process_flow(prs, template_type, slide_content, grid)
-
-
-def _render_process_flow(
-    prs: Presentation,
-    template_type: TemplateType,
-    slide_content: SlideContent,
-    grid: Grid,
-) -> None:
-    """Horizontal chevron process flow."""
-    layout = get_layout(prs, template_type, LayoutRole.CONTENT)
-    slide = prs.slides.add_slide(layout)
-
-    _add_slide_title(slide, grid, template_type, slide_content.title)
-
-    bullets = _get_bullet_texts(slide_content)
-    n = min(len(bullets), 5)  # Max 5 steps in process flow
-    if n == 0:
-        return
-
-    chevron_width = Inches(min(2.2, 11.0 / n))
-    chevron_height = Inches(1.5)
-    gap = Inches(0.15)
-    start_left = grid.content_left
-    top = grid.process_top
-
-    for i in range(n):
-        left = start_left + int(i * (chevron_width + gap))
-
-        shape = slide.shapes.add_shape(
-            MSO_SHAPE.CHEVRON,
-            left, top, chevron_width, chevron_height,
-        )
-        shape.fill.solid()
-        shape.fill.fore_color.theme_color = get_accent_color(i)
-
-        tf = shape.text_frame
-        tf.word_wrap = True
-        tf.paragraphs[0].alignment = PP_ALIGN.CENTER
-        tf.paragraphs[0].text = bullets[i]
-        tf.paragraphs[0].font.size = Pt(11)
-        tf.paragraphs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-        tf.paragraphs[0].font.bold = True
+        _ir_steps(slide, grid, items)
 
     _add_key_message_footer(slide, grid, slide_content.key_message)
 
 
-def _render_comparison(
-    prs: Presentation,
-    template_type: TemplateType,
-    slide_content: SlideContent,
-    grid: Grid,
-) -> None:
-    """Two-column comparison layout."""
-    layout = get_layout(prs, template_type, LayoutRole.CONTENT)
-    slide = prs.slides.add_slide(layout)
-
-    _add_slide_title(slide, grid, template_type, slide_content.title)
-
-    bullets = _get_bullet_texts(slide_content)
-    mid = len(bullets) // 2
-
-    # Left column with auto font sizing for two-column layout
-    left_box = slide.shapes.add_textbox(
-        grid.left_col_left, grid.content_top,
-        grid.left_col_width, grid.content_height,
-    )
-    tf_left = left_box.text_frame
-    tf_left.word_wrap = True
-    left_text = " ".join(bullets[:mid])
-    font_size = auto_font_size_pt(left_text, "two_col")
-    for i, text in enumerate(bullets[:mid]):
-        p = tf_left.paragraphs[0] if i == 0 else tf_left.add_paragraph()
-        p.text = f"• {text}"
-        p.font.size = font_size
-        p.space_after = Pt(6)
-
-    # Right column
-    right_box = slide.shapes.add_textbox(
-        grid.right_col_left, grid.content_top,
-        grid.right_col_width, grid.content_height,
-    )
-    tf_right = right_box.text_frame
-    tf_right.word_wrap = True
-    right_text = " ".join(bullets[mid:])
-    font_size_r = auto_font_size_pt(right_text, "two_col")
-    for i, text in enumerate(bullets[mid:]):
-        p = tf_right.paragraphs[0] if i == 0 else tf_right.add_paragraph()
-        p.text = f"• {text}"
-        p.font.size = font_size_r
-        p.space_after = Pt(6)
-
-    _add_key_message_footer(slide, grid, slide_content.key_message)
-
-
-def _render_timeline(
-    prs: Presentation,
-    template_type: TemplateType,
-    slide_content: SlideContent,
-    grid: Grid,
-) -> None:
-    """Horizontal timeline with rounded rectangles."""
-    layout = get_layout(prs, template_type, LayoutRole.CONTENT)
-    slide = prs.slides.add_slide(layout)
-
-    _add_slide_title(slide, grid, template_type, slide_content.title)
-
-    bullets = _get_bullet_texts(slide_content)
-    n = min(len(bullets), 6)
-    if n == 0:
-        return
-
-    node_width = Inches(min(1.8, 10.0 / n))
-    node_height = Inches(1.0)
-    line_y = Inches(3.0)  # Center line of timeline
-    gap = Inches(0.2)
-
-    # Draw horizontal line
-    slide.shapes.add_shape(
-        MSO_SHAPE.RECTANGLE,
-        grid.content_left, line_y + Inches(0.4),
-        grid.content_width, Inches(0.05),
-    ).fill.solid()
-
-    for i in range(n):
-        left = grid.content_left + int(i * (node_width + gap))
-        # Alternate above/below the line
-        top = line_y - Inches(0.8) if i % 2 == 0 else line_y + Inches(0.8)
-
-        shape = slide.shapes.add_shape(
-            MSO_SHAPE.ROUNDED_RECTANGLE,
-            left, top, node_width, node_height,
-        )
-        shape.fill.solid()
-        shape.fill.fore_color.theme_color = get_accent_color(i)
-
-        tf = shape.text_frame
-        tf.word_wrap = True
-        tf.paragraphs[0].alignment = PP_ALIGN.CENTER
-        tf.paragraphs[0].text = bullets[i]
-        tf.paragraphs[0].font.size = Pt(10)
-        tf.paragraphs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-
-    _add_key_message_footer(slide, grid, slide_content.key_message)
+# Fix 14: Removed dead code — _render_process_flow, _render_comparison,
+# _render_timeline were superseded by infographic_renderers module (Fix 13).
 
 
 # ── Agenda slide ─────────────────────────────────────────────────────
