@@ -44,12 +44,20 @@ def build_presentation(
     print(f"  Template: {template_type.value}")
     print(f"  Slides to render: {len(content.slides)}")
 
-    # Render each slide based on type and content
+    # Render each slide based on type and content (VIZ-1: error-protected)
+    render_errors: list[str] = []
     for slide_content in content.slides:
-        _render_slide(prs, template_type, grid, slide_content, content)
+        errors = _render_slide(prs, template_type, grid, slide_content, content)
+        render_errors.extend(errors)
+
+    if render_errors:
+        print(f"\n  Render errors ({len(render_errors)}):")
+        for err in render_errors:
+            print(f"    - {err}")
 
     # Validate
     issues = validate_presentation(prs)
+    issues.extend(render_errors)
     if issues:
         print(f"\n  Validation issues ({len(issues)}):")
         for issue in issues:
@@ -69,37 +77,53 @@ def _render_slide(
     grid: Grid,
     slide_content: SlideContent,
     full_content: PresentationContent,
-) -> None:
-    """Dispatch a single slide to the appropriate renderer."""
-    slide_type = slide_content.slide_type
-    layout = slide_content.layout
+) -> list[str]:
+    """Dispatch a single slide to the appropriate renderer.
 
-    if slide_type == SlideType.TITLE:
-        render_cover(prs, template_type, slide_content, full_content.title)
-        return
+    Returns a list of error messages (empty if successful).
+    VIZ-1: wraps each slide render in error protection so one failure
+    doesn't crash the entire pipeline.
+    """
+    errors: list[str] = []
+    slide_num = slide_content.slide_number
 
-    if slide_type == SlideType.THANK_YOU:
-        render_end(prs, template_type, slide_content)
-        return
+    try:
+        slide_type = slide_content.slide_type
+        layout = slide_content.layout
 
-    if slide_type == SlideType.AGENDA:
-        render_agenda(prs, template_type, slide_content, grid, full_content.slides)
-        return
+        if slide_type == SlideType.TITLE:
+            render_cover(prs, template_type, slide_content, full_content.title)
+            return errors
 
-    # Chart slide — has chart_data
-    if slide_content.chart_data is not None:
-        render_chart(prs, template_type, slide_content, grid)
-        return
+        if slide_type == SlideType.THANK_YOU:
+            render_end(prs, template_type, slide_content)
+            return errors
 
-    # Table slide — has table_data but no chart
-    if slide_content.table_data is not None:
-        render_table(prs, template_type, slide_content, grid)
-        return
+        if slide_type == SlideType.AGENDA:
+            render_agenda(prs, template_type, slide_content, grid, full_content.slides)
+            return errors
 
-    # Infographic layouts (comparison, timeline, process)
-    if layout in (LayoutType.COMPARISON, LayoutType.TIMELINE):
-        render_infographic(prs, template_type, slide_content, grid)
-        return
+        # Chart slide — has chart_data
+        if slide_content.chart_data is not None:
+            render_chart(prs, template_type, slide_content, grid)
+            return errors
 
-    # Default: bullet slide
-    render_bullets(prs, template_type, slide_content, grid)
+        # Table slide — has table_data but no chart
+        if slide_content.table_data is not None:
+            render_table(prs, template_type, slide_content, grid)
+            return errors
+
+        # Infographic layouts (comparison, timeline, process)
+        if layout in (LayoutType.COMPARISON, LayoutType.TIMELINE, LayoutType.PROCESS):
+            render_infographic(prs, template_type, slide_content, grid)
+            return errors
+
+        # Default: bullet slide
+        render_bullets(prs, template_type, slide_content, grid)
+
+    except Exception as exc:
+        error_msg = f"Slide {slide_num} ({slide_content.slide_type.value}): render failed — {exc}"
+        print(f"  WARNING: {error_msg}")
+        errors.append(error_msg)
+
+    return errors

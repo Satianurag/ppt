@@ -29,8 +29,8 @@ def validate_presentation(prs: Presentation) -> list[str]:
             f"Too many font families ({len(real_fonts)}): {real_fonts}. Max {MAX_FONT_FAMILIES}."
         )
 
-    # Structure checks
-    if len(prs.slides) < 3:
+    # Structure checks (hackathon brief: 10-15 slides required)
+    if len(prs.slides) < 10:
         issues.append(f"Only {len(prs.slides)} slides — minimum 10 expected.")
 
     return issues
