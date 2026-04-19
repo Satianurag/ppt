@@ -1,18 +1,16 @@
 """Multi-agent architecture for MD→PPTX pipeline.
 
-5-agent system (30% of hackathon score — Code Quality & Agentic):
-  Coordinator → Strategist → Designer → Executor → Reviewer
+4-agent LangGraph pipeline (scored under the 30% Code Quality & Agentic bucket):
+    START → Strategist → Designer → Executor → Reviewer
+                                                 │
+                                      (retry)  ──┘
 
-Orchestration modes:
-  1. CoordinatorAgent — pure-Python orchestration with retry loop
-  2. LangGraph StateGraph — graph-based orchestration with conditional edges
-
-Each agent has a clear role, communicates via structured AgentMessage objects,
-and follows the retry-with-feedback pattern from PPTAgent.
+Reviewer emits structured feedback when quality fails; the graph routes back to
+Designer with that feedback context so the next render attempt can correct
+specific defects. This implements the retry-with-feedback pattern from PPTAgent.
 """
 
 from agents.protocol import AgentMessage, AgentRole, PipelineState
-from agents.coordinator import CoordinatorAgent
 from agents.strategist import StrategistAgent
 from agents.designer import DesignerAgent
 from agents.executor import ExecutorAgent
@@ -23,7 +21,6 @@ __all__ = [
     "AgentMessage",
     "AgentRole",
     "PipelineState",
-    "CoordinatorAgent",
     "StrategistAgent",
     "DesignerAgent",
     "ExecutorAgent",

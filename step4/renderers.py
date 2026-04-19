@@ -365,7 +365,9 @@ def render_chart(
         _render_stat_card(prs, template_type, slide_content, grid, chart_data_model)
         return
 
-    layout = get_layout(prs, template_type, LayoutRole.CONTENT)
+    # Charts sit on TITLE_ONLY layout so the deck shows visible layout variety
+    # (hackathon feedback #2) rather than all content slides sharing 'Blank'.
+    layout = get_layout(prs, template_type, LayoutRole.TITLE_ONLY)
     slide = prs.slides.add_slide(layout)
 
     _add_slide_title(slide, grid, template_type, slide_content.title)
@@ -431,7 +433,9 @@ def _render_stat_card(
 
     _add_slide_title(slide, grid, template_type, slide_content.title)
 
-    # Render each data point as a large number with label
+    # Stat cards replace a failed chart — use TITLE_ONLY for visual variety.
+    # (The original add_slide above is kept because _render_stat_card rebuilds
+    # its own shapes on that slide.)
     if chart_data_model.series and chart_data_model.categories:
         n_items = len(chart_data_model.categories)
         card_width = Inches(min(3.0, 10.0 / max(n_items, 1)))
@@ -470,15 +474,17 @@ def render_table(
 ) -> None:
     """Render a styled table on a content slide.
 
-    Reuses PPTAgent's add_table() auto-column-width pattern (apis.py:329-341)
-    and adds custom zebra stripes + bold header styling (solution_architecture.md GAP 3).
+    Tables land on the TITLE_ONLY layout so they look visually distinct from
+    plain bullet slides (hackathon feedback #2 — layout variety).
     """
     table_data = slide_content.table_data
     if table_data is None:
         render_bullets(prs, template_type, slide_content, grid)
         return
 
-    layout = get_layout(prs, template_type, LayoutRole.CONTENT)
+    # Tables on TITLE_ONLY layout so they are visibly distinct from bullet
+    # and infographic slides.
+    layout = get_layout(prs, template_type, LayoutRole.TITLE_ONLY)
     slide = prs.slides.add_slide(layout)
 
     _add_slide_title(slide, grid, template_type, slide_content.title)
@@ -608,7 +614,8 @@ def render_agenda(
     all_slides: list[SlideContent],
 ) -> None:
     """Render an agenda/table of contents slide listing all section titles."""
-    layout = get_layout(prs, template_type, LayoutRole.CONTENT)
+    # Use DIVIDER layout so agenda stands apart from content-body slides.
+    layout = get_layout(prs, template_type, LayoutRole.DIVIDER)
     slide = prs.slides.add_slide(layout)
 
     _add_slide_title(slide, grid, template_type, "Agenda")

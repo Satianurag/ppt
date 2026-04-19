@@ -64,37 +64,65 @@ class ReviewerAgent(BaseAgent):
         state.quality_score = overall
         state.quality_report = quality_report
 
-        # 3. Determine pass/fail
-        critical_issues = [i for i in validation_issues if "overflow" in i.lower() or "margin" in i.lower()]
+        # 3. Determine pass/fail. Critical = anything the hackathon judges
+        # will visibly deduct for: overflow, margin violations, empty slides,
+        # low space usage, layout monotony.
+        # A validation issue is "critical" when it maps to a hackathon deduction
+        # that the Designer can realistically fix via re-extraction. Single
+        # empty-space warnings are noisy (retry cannot meaningfully increase
+        # content on one slide) — only treat them as critical when systemic.
+        hard_tokens = ("overflow", "margin violation", "no title", "orphan",
+                       "empty slide", "no text")
+        fill_warnings = [i for i in validation_issues
+                         if "fill more" in i.lower()
+                         or "space usage" in i.lower()
+                         or "consider filling" in i.lower()]
+        critical_issues = [i for i in validation_issues
+                           if any(tok in i.lower() for tok in hard_tokens)]
+        # Systemic space-fill problem: 3+ slides under-filled at once.
+        if len(fill_warnings) >= 3:
+            critical_issues.append(
+                f"{len(fill_warnings)} slides under-fill the canvas — "
+                "add more bullets or use an infographic layout"
+            )
+
+        # Layout diversity check — hackathon Feedback #2 hard gate.
+        unique_layouts: set[str] = set()
+        if pptx_path:
+            for sl in prs.slides:
+                unique_layouts.add(sl.slide_layout.name or "")
+        if len(unique_layouts) < 4 and len(prs.slides) >= 8:
+            critical_issues.append(
+                f"Only {len(unique_layouts)} unique layouts across "
+                f"{len(prs.slides)} slides — need more variety"
+            )
+
         passed = overall >= self.threshold and len(critical_issues) == 0
         state.review_passed = passed
 
-        # 4. Generate feedback for Designer retry
-        feedback_parts = []
+        # 4. Generate targeted feedback for Designer retry. The feedback is
+        # consumed verbatim by the extractor LLM prompt, so it must be
+        # specific and actionable.
+        feedback_parts: list[str] = []
         if not passed:
             if overall < self.threshold:
                 feedback_parts.append(
-                    f"Quality score {overall:.2f} below threshold {self.threshold}"
+                    f"Overall quality {overall:.2f} is below {self.threshold}."
                 )
             if critical_issues:
                 feedback_parts.append(
-                    f"Critical issues: {'; '.join(critical_issues[:3])}"
+                    "Fix these specific slides: " + "; ".join(critical_issues[:6])
                 )
-            if validation_issues:
-                feedback_parts.append(
-                    f"Validation: {len(validation_issues)} issues total"
-                )
-            # Include per-component breakdown for targeted feedback
             if scores:
-                low_components = []
                 avg = lambda attr: sum(getattr(s, attr) for s in scores) / len(scores)
-                for comp in ["structural_rules", "content_quality", "render_quality",
-                             "source_coverage", "narrative_flow"]:
-                    avg_val = avg(comp)
-                    if avg_val < 0.5:
-                        low_components.append(f"{comp}={avg_val:.2f}")
-                if low_components:
-                    feedback_parts.append(f"Weak areas: {', '.join(low_components)}")
+                low = [
+                    f"{c}={avg(c):.2f}"
+                    for c in ("structural_rules", "content_quality",
+                              "render_quality", "source_coverage", "narrative_flow")
+                    if avg(c) < 0.5
+                ]
+                if low:
+                    feedback_parts.append("Weak dimensions: " + ", ".join(low))
 
         state.review_feedback = " | ".join(feedback_parts) if feedback_parts else "PASSED"
 

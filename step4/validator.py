@@ -10,8 +10,8 @@ Rules implemented:
  1. Minimum margin (≥0.5")
  2. Right edge overflow check
  3. Bottom edge overflow check
- 4. Word count per slide (≤60)
- 5. Bullet length (≤8 words per bullet)
+ 4. Word count per slide (soft cap from constants)
+ 5. Bullet length (soft cap from constants)
  6. Font family consistency (≤2 families)
  7. Minimum slide count (≥10, hackathon brief)
  8. Maximum slide count (≤15, hackathon brief)
@@ -30,9 +30,14 @@ from pptx.util import Inches, Pt
 
 
 # Thresholds from Common Mistakes PPTX and research docs
+from constants import (
+    MAX_WORDS_PER_SLIDE as _MAX_WORDS_PER_SLIDE,
+    MAX_WORDS_PER_BULLET as _MAX_WORDS_PER_BULLET,
+)
+
 MIN_MARGIN_INCHES = 0.5
-MAX_WORDS_PER_SLIDE = 60
-MAX_WORDS_PER_BULLET = 8
+MAX_WORDS_PER_SLIDE = _MAX_WORDS_PER_SLIDE
+MAX_WORDS_PER_BULLET = _MAX_WORDS_PER_BULLET
 MAX_FONT_FAMILIES = 2
 MIN_FONT_SIZE_PT = 10
 MIN_SLIDE_COUNT = 10

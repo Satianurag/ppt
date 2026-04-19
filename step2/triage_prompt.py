@@ -1,6 +1,12 @@
 """Prompt template for content triage agent."""
 
-from constants import SLIDE_BUDGET, MANDATORY_SLIDES, MAX_CHART_SLIDES
+from constants import (
+    SLIDE_BUDGET,
+    MANDATORY_SLIDES,
+    MAX_CHART_SLIDES,
+    MAX_BULLETS_PER_SLIDE,
+    MAX_WORDS_PER_BULLET,
+)
 
 TRIAGE_PROMPT_TEMPLATE = """You are an expert presentation strategist. Create a slide plan from the content inventory below.
 
@@ -8,8 +14,8 @@ PRESENTATION REQUIREMENTS:
 - Total slides: {slide_budget}
 - Mandatory slides: Title (1), Agenda (1), Executive Summary (1), Conclusion/Thank You (1)
 - Content slides available: {content_budget}
-- Max chart slides: {max_chart_slides} (select only the most data-rich tables)
-- Max bullets per slide: 6 items, max 8 words each
+- Max chart slides (soft): {max_chart_slides} — pick the most data-rich tables
+- Max bullets per slide: {max_bullets} items, up to {max_words_per_bullet} words each
 - Title length: max 50 characters
 - Key message: 1 sentence summarizing the slide's main point
 - NO images — this presentation uses text, charts, and tables only
@@ -129,5 +135,7 @@ def build_triage_prompt(inventory_json: str, slide_budget: int = SLIDE_BUDGET) -
         slide_budget=slide_budget,
         content_budget=content_budget,
         max_chart_slides=MAX_CHART_SLIDES,
+        max_bullets=MAX_BULLETS_PER_SLIDE,
+        max_words_per_bullet=MAX_WORDS_PER_BULLET,
         inventory_json=inventory_json,
     )

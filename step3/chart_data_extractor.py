@@ -157,10 +157,14 @@ class ChartDataExtractor:
         if inventory_table_info:
             temporal_cols = inventory_table_info.get('temporal_columns', [])
             numeric_cols = inventory_table_info.get('numeric_columns', [])
-            
+
             if temporal_cols:
-                # First temporal column is likely categories (years, dates)
-                return temporal_cols[0], numeric_cols
+                # First temporal column = category axis (years / dates).
+                # Exclude temporal columns from series so a year column never
+                # gets plotted as a numeric series.
+                temporal_set = set(temporal_cols)
+                series_cols = [c for c in numeric_cols if c not in temporal_set]
+                return temporal_cols[0], series_cols
             elif numeric_cols:
                 # First non-numeric column is categories
                 category_candidates = [i for i in range(num_cols) if i not in numeric_cols]
