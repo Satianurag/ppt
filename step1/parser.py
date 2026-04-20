@@ -299,7 +299,18 @@ class MarkdownParser:
 
         return ""
 
-    def parse_file(self, filepath: Path) -> ContentInventory:
-        """Parse a markdown file."""
+    def parse_file(self, filepath: Path, extract_images: bool = True) -> ContentInventory:
+        """Parse a markdown file.
+
+        Args:
+            filepath: Path to the markdown file.
+            extract_images: If True, extract data from base64 images via
+                vision model and inject as markdown tables before parsing.
+        """
         markdown_text = filepath.read_text(encoding='utf-8')
+
+        if extract_images:
+            from step1.image_extractor import enrich_markdown_with_image_data
+            markdown_text = enrich_markdown_with_image_data(markdown_text)
+
         return self.parse(markdown_text)
