@@ -20,6 +20,7 @@ from typing import Optional
 
 from pptx.enum.dml import MSO_THEME_COLOR
 
+from step2.slide_plan_models import SlideType
 from step3.content_models import PresentationContent, SlideContent
 
 from step4 import layouts, template_ops
@@ -58,7 +59,6 @@ def _body_slices(content: PresentationContent) -> list[SlideContent]:
     for slide in ordered:
         if slide.slide_number in (1, TOTAL_SLIDES):
             continue
-        from step2.slide_plan_models import SlideType
         if slide.slide_type in (SlideType.TITLE, SlideType.THANK_YOU):
             continue
         trimmed.append(slide)

@@ -139,6 +139,47 @@ def _accent_fill(shape, theme: Optional[MSO_THEME_COLOR] = None) -> None:
     shape.line.fill.background()
 
 
+def _derive_compare_headers(content: SlideContent) -> tuple[str, str]:
+    """Derive meaningful column headers for two-column compare layouts.
+
+    Priority order:
+    1. Subtitle contains "vs" / "versus" — split on that.
+    2. Title contains "vs" / "versus" — split on that.
+    3. First two bullets each start with a label followed by a colon — use those labels.
+    4. Fallback: use the first ~3 words of each half's first bullet.
+    """
+    import re
+
+    for text in (content.subtitle, content.title):
+        if not text:
+            continue
+        for sep in ("versus", " vs. ", " vs ", " vs.", " v. "):
+            low = text.lower()
+            idx = low.find(sep)
+            if idx != -1:
+                left = text[:idx].strip()
+                right = text[idx + len(sep):].strip()
+                if left and right:
+                    return left, right
+
+    bullets = _bullet_texts(content)
+    if len(bullets) >= 2:
+        colon_pat = re.compile(r"^([^:]{2,30}):\s")
+        m0 = colon_pat.match(bullets[0])
+        m1 = colon_pat.match(bullets[1])
+        if m0 and m1:
+            return m0.group(1).strip(), m1.group(1).strip()
+
+    if len(bullets) >= 2:
+        mid = len(bullets) // 2
+        left_words = bullets[0].split()[:4]
+        right_words = bullets[mid].split()[:4]
+        if left_words and right_words:
+            return " ".join(left_words), " ".join(right_words)
+
+    return "Key Strengths", "Key Challenges"
+
+
 def _bullet_texts(slide_content: SlideContent) -> list[str]:
     """Flatten the Designer output to a list of bullet strings."""
     bullets: list[str] = []
@@ -323,11 +364,7 @@ def two_column_compare(slide, content: SlideContent) -> None:
     _add_title(slide, content.title)
     bullets = _bullet_texts(content)
 
-    if content.subtitle and "vs" in content.subtitle.lower():
-        parts = content.subtitle.split("vs", 1)
-        left_title, right_title = parts[0].strip(), parts[1].strip()
-    else:
-        left_title, right_title = "Option A", "Option B"
+    left_title, right_title = _derive_compare_headers(content)
 
     mid = len(bullets) // 2 or 1
     left_bullets = bullets[:mid] or [content.key_message]
@@ -385,6 +422,26 @@ _CHART_XL_TYPE = {
 }
 
 
+def _humanize_large_number_format(fmt: str, max_val: float) -> str:
+    """Convert a number format to use B/M/K suffixes for large values."""
+    abs_max = abs(max_val) if max_val else 0
+    is_currency = "$" in fmt
+
+    if abs_max >= 1_000_000_000:
+        if is_currency:
+            return '$#,##0.0,,"B"'
+        return '#,##0.0,,"B"'
+    elif abs_max >= 1_000_000:
+        if is_currency:
+            return '$#,##0.0,"M"'
+        return '#,##0.0,"M"'
+    elif abs_max >= 10_000:
+        if is_currency:
+            return '$#,##0,"K"'
+        return '#,##0,"K"'
+    return fmt
+
+
 def _add_chart(slide, left, top, width, height, data) -> None:
     chart_data = CategoryChartData()
     chart_data.categories = data.categories
@@ -399,6 +456,19 @@ def _add_chart(slide, left, top, width, height, data) -> None:
     if data.show_data_labels:
         plot = chart.plots[0]
         plot.has_data_labels = True
+
+    num_fmt = getattr(data, "number_format", "General")
+    if num_fmt and num_fmt != "General":
+        all_vals = []
+        for s in data.series:
+            all_vals.extend(v for v in s.get("values", []) if isinstance(v, (int, float)))
+        max_val = max(all_vals) if all_vals else 0
+        num_fmt = _humanize_large_number_format(num_fmt, max_val)
+        try:
+            chart.value_axis.tick_labels.number_format = num_fmt
+            chart.value_axis.tick_labels.number_format_is_linked = False
+        except (ValueError, AttributeError):
+            pass
 
 
 def chart_focused(slide, content: SlideContent) -> None:
@@ -629,16 +699,29 @@ def quote_emphasis(slide, content: SlideContent) -> None:
 # ── Layout 14: section_divider ───────────────────────────────────────
 
 def section_divider(slide, content: SlideContent) -> None:
+    bullets = _bullet_texts(content)
+    has_items = bool(bullets)
+
+    title_top = Inches(2.0) if has_items else Inches(2.8)
     _add_text(
-        slide, BODY_LEFT, Inches(2.8), BODY_WIDTH, Inches(2.0),
+        slide, BODY_LEFT, title_top, BODY_WIDTH, Inches(1.5),
         content.title, size=54, bold=True, align=PP_ALIGN.CENTER,
         anchor=MSO_ANCHOR.MIDDLE,
     )
     if content.subtitle or content.key_message:
         _add_text(
-            slide, BODY_LEFT, Inches(4.8), BODY_WIDTH, Inches(0.8),
+            slide, BODY_LEFT, Inches(3.5) if has_items else Inches(4.8),
+            BODY_WIDTH, Inches(0.8),
             content.subtitle or content.key_message,
             size=22, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.MIDDLE,
+        )
+
+    if has_items:
+        items_text = "\n".join(f"•  {b}" for b in bullets[:8])
+        _add_text(
+            slide, Inches(2.5), Inches(4.4), Inches(8.33), Inches(3.0),
+            items_text, size=16, align=PP_ALIGN.LEFT,
+            anchor=MSO_ANCHOR.TOP, line_spacing=1.5,
         )
 
 

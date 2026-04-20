@@ -11,7 +11,7 @@ import re
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
-from .content_models import ExtractedBullet, KeyPoint
+from .content_models import ExtractedBullet
 from .markdown_reparser import SectionContent
 from llm import LLMClient, StructuredLLMClient
 from constants import MAX_BULLETS_PER_SLIDE, MAX_WORDS_PER_BULLET, MAX_BULLET_CHARS, VERBOSITY_RULES, DEFAULT_VERBOSITY
@@ -45,16 +45,6 @@ class MergedSectionOutput(BaseModel):
     )
 
 
-class KeyPointsOutput(BaseModel):
-    """Structured output for dual-format content organization.
-
-    Reused from PPTAgent content_organizer.yaml structure.
-    """
-    key_points: List[KeyPoint] = Field(
-        description="Key points in dual format (paragraph + bullet)"
-    )
-
-
 class BulletRewriter:
     """LLM-powered bullet point generation with quality optimization."""
 
@@ -67,7 +57,6 @@ class BulletRewriter:
         self.client = client
         self.bullet_client: StructuredLLMClient = client.with_structured_output(BulletRewriteOutput)
         self.merge_client: StructuredLLMClient = client.with_structured_output(MergedSectionOutput)
-        self.key_points_client: StructuredLLMClient = client.with_structured_output(KeyPointsOutput)
 
     def rewrite_bullets(
         self,
@@ -223,37 +212,6 @@ Create a unified narrative, not a list of section summaries."""
             ))
 
         return extracted[:max_bullets]
-
-    def extract_key_points(
-        self,
-        source_text: str,
-        key_message: str,
-    ) -> List[KeyPoint]:
-        """Extract dual-format key points (paragraph + bullet).
-
-        Reused from PPTAgent content_organizer.yaml — each key point
-        is expressed in both paragraph form and bullet form.
-        """
-        prompt = f"""Extract key points from the given content source.
-Distill essential information, ensure all critical points are extracted.
-
-Output Requirements:
-Key Points Extraction
-  - Extract all key points from the input content.
-  - Express each extracted key point in two formats:
-    a) Paragraph form: Fewer but longer paragraphs, 1-3 items, ~30 words each.
-    b) Bullet form: More but shorter bullet points, 3-8 items, ~10 words each.
-  - If no content is provided, leave the key points an empty list.
-
-Input:
-{source_text[:4000]}
-
-Key Message: {key_message}
-
-Output: give your output in JSON format."""
-
-        result = self.key_points_client.invoke_with_retry(prompt, max_retries=3)
-        return result.key_points
 
     def polish_bullets(
         self,

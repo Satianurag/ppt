@@ -82,8 +82,8 @@ def _balance_slide_density(slides: List[SlideContent]) -> List[SlideContent]:
 class ContentOptimizer:
     """Stateless wrapper around the three mutation passes."""
 
-    def __init__(self, client=None) -> None:
-        self.client = client
+    def __init__(self) -> None:
+        pass
 
     def optimize(self, presentation: PresentationContent) -> PresentationContent:
         presentation.slides = _deduplicate_bullets(presentation.slides)
