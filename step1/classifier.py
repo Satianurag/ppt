@@ -128,13 +128,24 @@ def detect_timeline(heading: str, content_text: str) -> bool:
     return False
 
 
+_NUMERIC_VALUE_PATTERN = re.compile(
+    r"""^[\s$€£¥]*-?[\d,.]+(?:\s*[%KMBT])?(?:\s+[A-Za-z][A-Za-z\s/\-]*)?$""",
+    re.IGNORECASE,
+)
+
+
 def is_numeric_column(header: str, values: List[str]) -> bool:
-    """Check if a column contains primarily numeric data."""
+    """Check if a column contains primarily numeric data.
+
+    Accepts plain numbers, currency, percentages, and numbers followed by a
+    unit word such as ``USD``, ``EUR``, ``ratio``, ``index points``, ``GW``.
+    """
     if not values:
         return False
 
-    numeric_pattern = re.compile(r'^[\s$€£¥]*-?[\d,.]+\s*[%KMBT]?\s*$', re.IGNORECASE)
-    numeric_count = sum(1 for v in values if numeric_pattern.match(v.strip()))
+    numeric_count = sum(
+        1 for v in values if _NUMERIC_VALUE_PATTERN.match(v.strip())
+    )
     return numeric_count / len(values) > 0.5
 
 

@@ -100,7 +100,6 @@ class ContentExtractor:
 
         extraction_time = time.time() - self.stats['start_time']
         presentation.stats = self._build_stats(presentation, extraction_time)
-        presentation.stats.quality_scores = self.optimizer.last_quality_scores
 
         return presentation
 
@@ -369,53 +368,3 @@ class ContentExtractor:
             warnings=all_warnings,
         )
 
-    def generate_report(self, presentation: PresentationContent) -> str:
-        """Generate a comprehensive extraction report."""
-        lines = [
-            "=" * 70,
-            "STEP 3: CONTENT EXTRACTION REPORT",
-            "=" * 70,
-            "",
-            f"Presentation: {presentation.title}",
-            f"Total Slides: {presentation.total_slides}",
-            f"Extraction Time: {presentation.stats.extraction_time_seconds:.2f}s" if presentation.stats else "",
-            "",
-            "CONTENT SUMMARY:",
-            "-" * 40,
-        ]
-
-        if presentation.stats:
-            lines.extend([
-                f"Slides with LLM: {presentation.stats.slides_with_llm}",
-                f"Charts extracted: {presentation.stats.charts_extracted}",
-                f"Tables extracted: {presentation.stats.tables_extracted}",
-                f"Total words: {presentation.stats.total_word_count}",
-                f"Avg words/slide: {presentation.stats.avg_words_per_slide:.1f}",
-                f"LLM API calls: {presentation.stats.llm_api_calls}",
-                "",
-            ])
-
-        lines.extend(["PER-SLIDE BREAKDOWN:", "-" * 40])
-
-        for slide in presentation.slides:
-            content_types = []
-            if slide.bullets:
-                content_types.append(f"{len(slide.bullets)} bullets")
-            if slide.key_points:
-                content_types.append(f"{len(slide.key_points)} key points")
-            if slide.chart_data:
-                content_types.append(f"chart ({slide.chart_data.chart_type.value})")
-            if slide.table_data:
-                content_types.append("table")
-
-            content_str = ", ".join(content_types) if content_types else "(title slide)"
-            lines.append(
-                f"Slide {slide.slide_number}: {slide.title[:40]}... "
-                f"[{content_str}] ({slide.word_count} words)"
-            )
-
-        lines.append("")
-        quality_report = self.optimizer.generate_quality_report(presentation)
-        lines.append(quality_report)
-
-        return "\n".join(lines)

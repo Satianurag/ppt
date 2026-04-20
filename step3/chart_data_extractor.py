@@ -153,23 +153,47 @@ class ChartDataExtractor:
         
         num_cols = len(headers)
         
+        def column_values(col: int) -> List[str]:
+            return [row[col] for row in data_rows if col < len(row)]
+
+        def is_usable_category_col(col: int) -> bool:
+            vals = [v for v in column_values(col) if v and v.strip()]
+            if not vals:
+                return False
+            unique = {v.strip() for v in vals}
+            if len(unique) < 2 and len(vals) > 1:
+                return False  # degenerate: all rows share the same label
+            avg_len = sum(len(v) for v in vals) / len(vals)
+            if avg_len > 28:
+                return False  # sentence-length labels make unreadable x-axis
+            return True
+
         # Use inventory info if available
         if inventory_table_info:
             temporal_cols = inventory_table_info.get('temporal_columns', [])
             numeric_cols = inventory_table_info.get('numeric_columns', [])
+            temporal_set = set(temporal_cols)
 
-            if temporal_cols:
-                # First temporal column = category axis (years / dates).
-                # Exclude temporal columns from series so a year column never
-                # gets plotted as a numeric series.
-                temporal_set = set(temporal_cols)
-                series_cols = [c for c in numeric_cols if c not in temporal_set]
-                return temporal_cols[0], series_cols
-            elif numeric_cols:
-                # First non-numeric column is categories
-                category_candidates = [i for i in range(num_cols) if i not in numeric_cols]
+            series_cols = [c for c in numeric_cols if c not in temporal_set]
+
+            for col in temporal_cols:
+                if is_usable_category_col(col):
+                    return col, series_cols
+
+            non_numeric_cols = [
+                i for i in range(num_cols)
+                if i not in numeric_cols and i not in temporal_set
+            ]
+            for col in non_numeric_cols:
+                if is_usable_category_col(col):
+                    return col, series_cols or numeric_cols
+
+            if series_cols or numeric_cols:
+                category_candidates = [
+                    i for i in range(num_cols) if i not in numeric_cols
+                ]
                 if category_candidates:
-                    return category_candidates[0], numeric_cols
+                    return category_candidates[0], series_cols or numeric_cols
         
         # Auto-detect from data
         numeric_cols = []
@@ -206,8 +230,11 @@ class ChartDataExtractor:
         """Parse a string value into numeric with metadata."""
         if not value or not value.strip():
             return None
-        
+
         value = value.strip().replace(',', '')
+        # Strip trailing unit word ("USD", "EUR", "ratio", "GW", "index points")
+        # so "109,100,000,000.00 USD" or "22.09 ratio" parse cleanly.
+        value = re.sub(r"\s+[A-Za-z][A-Za-z\s/\-]*$", "", value).strip()
         
         # Try currency
         currency_match = self.currency_pattern.match(value)

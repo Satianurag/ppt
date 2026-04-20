@@ -73,6 +73,9 @@ class PipelineState:
     markdown_path: str = ""
     template_path: str = ""
     output_dir: str = "./output"
+    output_path: str = ""
+    presenter: str = ""
+    presentation_date: str = ""
 
     # Step 1 output (Strategist)
     inventory: ContentInventory | None = None
