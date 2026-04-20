@@ -3,7 +3,7 @@
 from .content_extractor import ContentExtractor
 from .content_models import (
     PresentationContent, SlideContent, ChartData, TableData,
-    ExtractedBullet, KeyPoint, QualityScore, ExtractionStats,
+    ExtractedBullet, KeyPoint, ExtractionStats,
 )
 
 __all__ = [
@@ -14,6 +14,5 @@ __all__ = [
     "TableData",
     "ExtractedBullet",
     "KeyPoint",
-    "QualityScore",
     "ExtractionStats",
 ]

@@ -1,5 +1,5 @@
-"""Step 4: PPTX Rendering — convert PresentationContent to a .pptx file."""
+"""Step 4 — PPTX rendering via template preservation + layout catalog."""
 
-from step4.slide_builder import build_presentation
+from step4.deck_builder import build_deck
 
-__all__ = ["build_presentation"]
+__all__ = ["build_deck"]

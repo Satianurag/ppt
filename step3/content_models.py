@@ -163,38 +163,6 @@ class SlideContent(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
-class QualityScore(BaseModel):
-    """Quality scoring per slide — full SlideForge 6-component system.
-
-    Weights from SlideForge aggregator.py DEFAULT_WEIGHTS:
-      code_rules: 1.0, render_quality: 2.0, claude_aesthetic_html: 1.5,
-      claude_aesthetic_visual: 1.5, content_quality: 2.0, brief_reconstruction: 2.0
-
-    Adapted for python-pptx context (no HTML/visual rendering):
-      code_rules (1.0)       → structural_rules: title present, section count, word count, non-empty
-      content_quality (2.0)  → content_quality: topic_relevance, factual_grounding, uniqueness, flow
-      render_quality (2.0)   → render_quality: margin compliance, font consistency, space filling
-      brief_reconstruction (2.0) → brief_reconstruction: topic similarity, audience match, theme coverage
-      source_coverage (1.5)  → source_coverage: how much source material was used
-      narrative_flow (1.0)   → narrative_flow: logical slide progression
-    """
-
-    # SlideForge code_rules (weight 1.0)
-    structural_rules: float = Field(ge=0.0, le=1.0, description="Title present, section count, word count, non-empty sections")
-    # SlideForge content_quality (weight 2.0)
-    content_quality: float = Field(ge=0.0, le=1.0, description="Topic relevance + factual grounding + uniqueness + flow")
-    # SlideForge render_quality (weight 2.0)
-    render_quality: float = Field(ge=0.0, le=1.0, description="Layout compliance, font consistency, space filling")
-    # SlideForge brief_reconstruction (weight 2.0)
-    brief_reconstruction: float = Field(ge=0.0, le=1.0, description="Can we recover the brief from the slides?")
-    # Source coverage (weight 1.5)
-    source_coverage: float = Field(ge=0.0, le=1.0, description="How much source content was used")
-    # Narrative flow (weight 1.0)
-    narrative_flow: float = Field(ge=0.0, le=1.0, description="Logical flow from previous slide")
-
-    overall: float = Field(ge=0.0, le=1.0, description="Weighted average using SlideForge weights")
-
-
 class ExtractionStats(BaseModel):
     """Statistics about the extraction process."""
 
@@ -207,7 +175,6 @@ class ExtractionStats(BaseModel):
     llm_api_calls: int
     llm_tokens_used: int
     extraction_time_seconds: float
-    quality_scores: Optional[List[QualityScore]] = Field(default=None)
     warnings: List[str] = Field(default_factory=list)
 
 
