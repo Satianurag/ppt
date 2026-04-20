@@ -35,6 +35,21 @@ class ChartDataExtractor:
             re.IGNORECASE
         )
     
+    _GENERIC_SERIES_NAMES = {
+        "value", "values", "value and units", "amount", "number",
+        "data", "count", "total", "figure", "figures",
+        "announced amount and units", "units",
+    }
+
+    def _clean_series_name(self, name: str, chart_title: str) -> str:
+        """Replace generic series names with a meaningful label derived from chart title."""
+        if name.strip().lower() in self._GENERIC_SERIES_NAMES:
+            words = chart_title.split()
+            if len(words) >= 2:
+                return " ".join(words[:4])
+            return chart_title or name
+        return name
+
     def extract_chart_data(
         self,
         table_data: List[List[str]],
@@ -89,6 +104,7 @@ class ChartDataExtractor:
                 continue
             
             series_name = headers[col_idx] if col_idx < len(headers) else f"Series {col_idx}"
+            series_name = self._clean_series_name(series_name, chart_title)
             values = []
             
             for row in data_rows:

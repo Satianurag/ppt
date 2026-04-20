@@ -11,7 +11,7 @@ from step1.models import ContentInventory, Section
 from step2.slide_plan_models import PresentationPlan, SlidePlan, SlideType, LayoutType
 from .content_models import (
     PresentationContent, SlideContent, ChartData, TableData,
-    ExtractedBullet, ExtractionStats, KeyPoint,
+    ExtractedBullet, ExtractionStats,
 )
 from .markdown_reparser import MarkdownReparser, SectionContent
 from .chart_data_extractor import ChartDataExtractor
@@ -34,7 +34,8 @@ class ContentExtractor:
         self.reparser = MarkdownReparser()
         self.chart_extractor = ChartDataExtractor()
         self.bullet_rewriter = BulletRewriter(client)
-        self.optimizer = ContentOptimizer(client)
+        self.optimizer = ContentOptimizer()
+        self.feedback_context: str = ""
 
         self.stats = {
             'llm_calls': 0,
@@ -252,6 +253,14 @@ class ContentExtractor:
                 if inventory_table_info:
                     break
 
+            # Use suggest_chart_type to validate/override the triage agent's choice
+            suggested = self.chart_extractor.suggest_chart_type(table_data)
+            if chart_type != suggested:
+                print(f"  [Extractor] Slide {slide_plan.slide_number}: "
+                      f"overriding chart type {chart_type.value} -> {suggested.value} "
+                      f"(data-driven suggestion)")
+                chart_type = suggested
+
             return self.chart_extractor.extract_chart_data(
                 table_data, chart_type, table_index, chart_title, inventory_table_info,
             )
@@ -303,7 +312,7 @@ class ContentExtractor:
                     merge_reason = merge_reasoning[key]
                     break
 
-        feedback = getattr(self, "feedback_context", "")
+        feedback = self.feedback_context
 
         if len(source_sections) == 1:
             section = source_sections[0]
@@ -316,8 +325,6 @@ class ContentExtractor:
                 feedback_context=feedback,
             )
             self.stats['llm_calls'] += 1
-            return bullets
-
         else:
             bullets = self.bullet_rewriter.rewrite_merged_sections(
                 sections=source_sections,
@@ -326,7 +333,17 @@ class ContentExtractor:
                 feedback_context=feedback,
             )
             self.stats['llm_calls'] += 1
-            return bullets
+
+        # Polish pass for consistency and impact
+        if bullets:
+            raw_texts = [b.text for b in bullets]
+            polished = self.bullet_rewriter.polish_bullets(raw_texts, key_message)
+            self.stats['llm_calls'] += 1
+            for i, b in enumerate(bullets):
+                if i < len(polished):
+                    b.text = polished[i]
+
+        return bullets
 
     def _calculate_word_count(self, slide: SlideContent) -> int:
         """Calculate total word count for slide."""

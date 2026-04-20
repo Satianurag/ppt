@@ -91,4 +91,12 @@ class ContentTriageAgent:
         })
         plan.charts_planned = len([s for s in plan.slides if s.content_type == "chart"])
 
+        # Validate section coverage — warn if source sections were dropped
+        if not plan.validate_section_coverage(valid_section_ids):
+            covered = {sid for s in plan.slides for sid in s.source_sections}
+            missing = valid_section_ids - covered
+            if missing:
+                print(f"  [Triage] Warning: {len(missing)} source sections not covered "
+                      f"in slide plan: {missing}")
+
         return plan

@@ -33,16 +33,22 @@ class ReviewerAgent(BaseAgent):
         for r in results.values():
             all_issues.extend(r.issues)
 
+        # Content-quality validation (wired-in validate_completeness)
+        content_issues = _run_content_validation(state)
+        all_issues.extend(content_issues)
+
         passed = all(r.passed for r in results.values())
         # C4 issues are non-fatal (spacing is softer than structure).
         fatal = [r for k, r in results.items() if k in ("C1", "C2", "C3") and not r.passed]
 
-        base_score = 1.0 if passed else max(
+        structural_score = 1.0 if passed else max(
             0.0, 1.0 - 0.15 * sum(len(r.issues) for r in results.values())
         )
+        content_penalty = min(0.3, len(content_issues) * 0.05)
+        base_score = max(0.0, structural_score - content_penalty)
 
         state.quality_score = base_score
-        state.quality_report = _format_report(results)
+        state.quality_report = _format_report(results, content_issues)
         state.review_passed = len(fatal) == 0 and base_score >= self.threshold
         state.review_feedback = "; ".join(all_issues[:8])
 
@@ -59,11 +65,25 @@ class ReviewerAgent(BaseAgent):
         return state
 
 
-def _format_report(results: dict) -> str:
+def _run_content_validation(state: PipelineState) -> list[str]:
+    """Run content completeness checks if extracted content is available."""
+    if not state.presentation_content:
+        return []
+    try:
+        return state.presentation_content.validate_completeness()
+    except Exception:
+        return []
+
+
+def _format_report(results: dict, content_issues: list[str] | None = None) -> str:
     lines: list[str] = []
     for name, r in results.items():
         status = "PASS" if r.passed else "FAIL"
         lines.append(f"[{name}] {status} ({len(r.issues)} issues)")
         for issue in r.issues[:5]:
+            lines.append(f"    - {issue}")
+    if content_issues:
+        lines.append(f"[Content] {'PASS' if not content_issues else 'WARN'} ({len(content_issues)} issues)")
+        for issue in content_issues[:5]:
             lines.append(f"    - {issue}")
     return "\n".join(lines)
