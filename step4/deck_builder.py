@@ -18,10 +18,23 @@ import json
 import os
 from typing import Optional
 
+from pptx.enum.dml import MSO_THEME_COLOR
+
 from step3.content_models import PresentationContent, SlideContent
 
-from step4 import template_ops
+from step4 import layouts, template_ops
 from step4.scheduler import schedule
+from step4.template_ops import TemplateType
+
+
+# Per-template primary accent — templates differ on which accent slot holds
+# the dark brand color. UAE_Solar's accent1 is a near-white sage (#EFF3E5),
+# so tiles would be illegible; its dark brand green lives in accent2.
+_PRIMARY_ACCENT_BY_TEMPLATE: dict[TemplateType, MSO_THEME_COLOR] = {
+    TemplateType.ACCENTURE: MSO_THEME_COLOR.ACCENT_1,
+    TemplateType.AI_BUBBLE: MSO_THEME_COLOR.ACCENT_1,
+    TemplateType.UAE_SOLAR: MSO_THEME_COLOR.ACCENT_2,
+}
 
 
 TOTAL_SLIDES = 15
@@ -73,6 +86,9 @@ def build_deck(
 ) -> str:
     """Produce the final 15-slide .pptx at ``output_path``."""
     prs, tpl = template_ops.load_blank_canvas(template_path)
+    layouts.set_primary_accent(
+        _PRIMARY_ACCENT_BY_TEMPLATE.get(tpl, MSO_THEME_COLOR.ACCENT_1)
+    )
 
     # Slide 1 — cover
     subtitle = cover_subtitle or _derive_cover_subtitle(content)

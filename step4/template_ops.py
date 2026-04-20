@@ -179,9 +179,27 @@ def add_content_slide(prs: Presentation, template: TemplateType, pick: int = 0):
     The layout is a blank-ish canvas — the slide's visual identity is produced
     by the layout renderer (which draws the geometry), while the master still
     provides theme colors, fonts, and the background chrome.
+
+    Any title/body placeholders inherited from the layout are removed so empty
+    "Click to add Title" / "Click to add Text" prompts do not ghost through the
+    rendered geometry.
     """
     layout = get_layout(prs, template, "content", pick=pick)
-    return prs.slides.add_slide(layout)
+    slide = prs.slides.add_slide(layout)
+    _remove_empty_placeholders(slide)
+    return slide
+
+
+def _remove_empty_placeholders(slide) -> None:
+    """Delete every placeholder shape from a slide.
+
+    The layout's master chrome (logos, background, decorative shapes) is part of
+    the slide layout XML, not the slide itself — removing slide-level
+    placeholders does not touch the master chrome.
+    """
+    spTree = slide.shapes._spTree
+    for ph in list(slide.placeholders):
+        spTree.remove(ph._element)
 
 
 def _add_runtime_textbox(

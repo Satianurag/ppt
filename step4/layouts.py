@@ -116,10 +116,26 @@ def _add_key_footer(slide, text: str) -> None:
     )
 
 
-def _accent_fill(shape, theme: MSO_THEME_COLOR = MSO_THEME_COLOR.ACCENT_1) -> None:
+_PRIMARY_ACCENT: MSO_THEME_COLOR = MSO_THEME_COLOR.ACCENT_1
+
+
+def set_primary_accent(theme: MSO_THEME_COLOR) -> None:
+    """Set the master theme color used for every primary tile in the deck.
+
+    Templates do not all declare ``accent1`` as their dark/saturated brand
+    color — UAE_Solar's ``accent1`` is a near-white sage. The deck builder
+    resolves the darkest accent per template at load time and registers it
+    here so KPI tiles, cards, and timeline nodes always render with enough
+    contrast for white text.
+    """
+    global _PRIMARY_ACCENT
+    _PRIMARY_ACCENT = theme
+
+
+def _accent_fill(shape, theme: Optional[MSO_THEME_COLOR] = None) -> None:
     """Fill a shape with a master theme color — never a hardcoded RGB."""
     shape.fill.solid()
-    shape.fill.fore_color.theme_color = theme
+    shape.fill.fore_color.theme_color = theme if theme is not None else _PRIMARY_ACCENT
     shape.line.fill.background()
 
 
@@ -154,16 +170,28 @@ def bullet_text(slide, content: SlideContent) -> None:
 
 # ── Layout 2: kpi_big_numbers ────────────────────────────────────────
 
+_KPI_VALUE = r"\$?[0-9][\d,.]*\s*(?:%|bn|tn|million|billion|trillion|[KMBT])?"
+
+
 def _extract_kpi_from_text(text: str) -> Optional[tuple[str, str]]:
-    """Return (value, label) if text looks like a KPI bullet (e.g. '45% growth')."""
+    """Return (value, label) if text starts with a self-contained metric.
+
+    A metric is digits optionally prefixed by $, optionally suffixed by %, a
+    unit (K/M/B/T/bn/tn) or a full word (million/billion/trillion). A word
+    boundary is required between the value and the label so we never chew off
+    the first letter of the following word (`326 acquisitions` must not become
+    `326 a / cquisitions`).
+    """
     import re
-    m = re.match(r"\s*([0-9][\d,.]*\s*[%$]?[A-Za-z]?)\s*[:—\-–]?\s*(.+)", text)
-    if m:
-        value = m.group(1).strip()
-        label = m.group(2).strip()
-        if value and label and len(value) <= 12:
-            return value, label
-    return None
+    pattern = rf"\s*({_KPI_VALUE})\s+[:—\-–]?\s*(.+)"
+    m = re.match(pattern, text, flags=re.IGNORECASE)
+    if not m:
+        return None
+    value = m.group(1).strip()
+    label = m.group(2).strip()
+    if not value or not label or len(value) > 12:
+        return None
+    return value, label
 
 
 def kpi_big_numbers(slide, content: SlideContent) -> None:
@@ -188,7 +216,7 @@ def kpi_big_numbers(slide, content: SlideContent) -> None:
     for i, (value, label) in enumerate(kpis):
         left = Emu(BODY_LEFT + i * (tile_w + gap))
         tile = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, tile_w, tile_h)
-        _accent_fill(tile, MSO_THEME_COLOR.ACCENT_1)
+        _accent_fill(tile)
         tile.text_frame.margin_left = Inches(0.2)
         tile.text_frame.margin_right = Inches(0.2)
         tile.text_frame.margin_top = Inches(0.3)
@@ -230,7 +258,7 @@ def four_column_icons(slide, content: SlideContent) -> None:
     for i, text in enumerate(bullets):
         left = Emu(BODY_LEFT + i * (col_w + gap))
         icon_box = slide.shapes.add_shape(MSO_SHAPE.OVAL, left, top, icon_h, icon_h)
-        _accent_fill(icon_box, MSO_THEME_COLOR.ACCENT_1)
+        _accent_fill(icon_box)
         icon_box.text_frame.text = icons[i]
         p = icon_box.text_frame.paragraphs[0]
         p.alignment = PP_ALIGN.CENTER
@@ -264,7 +292,7 @@ def three_column_grid(slide, content: SlideContent) -> None:
     for i, text in enumerate(cards):
         left = Emu(BODY_LEFT + i * (col_w + gap))
         card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, col_w, card_h)
-        _accent_fill(card, MSO_THEME_COLOR.ACCENT_1 if i % 2 == 0 else MSO_THEME_COLOR.ACCENT_2)
+        _accent_fill(card)
         card.text_frame.margin_left = Inches(0.3)
         card.text_frame.margin_right = Inches(0.3)
         card.text_frame.margin_top = Inches(0.3)
@@ -310,15 +338,15 @@ def two_column_compare(slide, content: SlideContent) -> None:
     top = Inches(1.9)
     card_h = Inches(4.4)
 
-    for i, (ctitle, citems, color) in enumerate(
+    for i, (ctitle, citems) in enumerate(
         [
-            (left_title, left_bullets, MSO_THEME_COLOR.ACCENT_1),
-            (right_title, right_bullets, MSO_THEME_COLOR.ACCENT_2),
+            (left_title, left_bullets),
+            (right_title, right_bullets),
         ]
     ):
         left = Emu(BODY_LEFT + i * (col_w + gap))
         card = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left, top, col_w, card_h)
-        _accent_fill(card, color)
+        _accent_fill(card)
         tf = card.text_frame
         tf.margin_left = Inches(0.3)
         tf.margin_right = Inches(0.3)
@@ -463,7 +491,7 @@ def timeline(slide, content: SlideContent) -> None:
     for i, b in enumerate(bullets):
         cx = Emu(BODY_LEFT + i * (node_r + gap))
         node = slide.shapes.add_shape(MSO_SHAPE.OVAL, cx, track_y - Inches(0.18), node_r, node_r)
-        _accent_fill(node, MSO_THEME_COLOR.ACCENT_1)
+        _accent_fill(node)
         node.text_frame.text = str(i + 1)
         p = node.text_frame.paragraphs[0]
         p.alignment = PP_ALIGN.CENTER
@@ -496,7 +524,7 @@ def process(slide, content: SlideContent) -> None:
     for i, b in enumerate(bullets):
         left = Emu(BODY_LEFT + i * (chev_w + gap))
         chev = slide.shapes.add_shape(MSO_SHAPE.CHEVRON, left, top, chev_w, chev_h)
-        _accent_fill(chev, MSO_THEME_COLOR.ACCENT_1 if i % 2 == 0 else MSO_THEME_COLOR.ACCENT_2)
+        _accent_fill(chev)
         tf = chev.text_frame
         tf.clear()
         tf.vertical_anchor = MSO_ANCHOR.MIDDLE
@@ -535,7 +563,7 @@ def pyramid(slide, content: SlideContent) -> None:
         left = Emu(center_x - w // 2)
         top = Emu(start_top + i * (level_h + gap))
         shape = slide.shapes.add_shape(MSO_SHAPE.TRAPEZOID, left, top, w, level_h)
-        _accent_fill(shape, MSO_THEME_COLOR.ACCENT_1 if i % 2 == 0 else MSO_THEME_COLOR.ACCENT_2)
+        _accent_fill(shape)
         tf = shape.text_frame
         tf.clear()
         tf.vertical_anchor = MSO_ANCHOR.MIDDLE
@@ -567,7 +595,7 @@ def funnel(slide, content: SlideContent) -> None:
         left = Emu(center_x - w // 2)
         top = Emu(start_top + i * (stage_h + gap))
         shape = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, w, stage_h)
-        _accent_fill(shape, MSO_THEME_COLOR.ACCENT_1)
+        _accent_fill(shape)
         tf = shape.text_frame
         tf.clear()
         tf.vertical_anchor = MSO_ANCHOR.MIDDLE
