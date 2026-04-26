@@ -39,7 +39,10 @@ class ReviewerAgent(BaseAgent):
 
         passed = all(r.passed for r in results.values())
         # C4 issues are non-fatal (spacing is softer than structure).
-        fatal = [r for k, r in results.items() if k in ("C1", "C2", "C3") and not r.passed]
+        fatal = [
+            r for k, r in results.items()
+            if k in ("C1", "C2", "C3", "C5", "C6") and not r.passed
+        ]
 
         structural_score = 1.0 if passed else max(
             0.0, 1.0 - 0.15 * sum(len(r.issues) for r in results.values())

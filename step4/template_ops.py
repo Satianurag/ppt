@@ -11,10 +11,15 @@ This module owns everything that is template-shaped and template-sensitive.
 from __future__ import annotations
 
 from enum import Enum
+import os
+import zipfile
 from typing import NamedTuple, Optional
 
 from pptx import Presentation
-from pptx.util import Inches, Pt
+from pptx.enum.dml import MSO_THEME_COLOR
+from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
+from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+from pptx.util import Emu, Inches, Pt
 
 
 class TemplateType(str, Enum):
@@ -99,7 +104,8 @@ def _drop_all_slides(prs: Presentation) -> None:
     rel_ns = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
     while len(xml_slides) > 0:
         r_id = xml_slides[0].get(rel_ns)
-        prs.part.drop_rel(r_id)
+        if r_id is not None:
+            prs.part.drop_rel(r_id)
         del xml_slides[0]
 
 
@@ -114,6 +120,287 @@ def load_blank_canvas(template_path: str) -> tuple[Presentation, TemplateType]:
     tpl = detect_template(prs)
     _drop_all_slides(prs)
     return prs, tpl
+
+
+def load_editable_canvas(template_path: str) -> tuple[Presentation, TemplateType]:
+    """Create a picture-free 16:9 canvas while preserving template identity.
+
+    The supplied master decks contain media in masters/layouts. Because the final
+    output must contain no pictures at all, generation starts from a clean PPTX
+    package and later copies only the selected master's theme XML.
+    """
+    source = Presentation(template_path)
+    tpl = detect_template(source)
+    prs = Presentation()
+    prs.slide_width = Inches(13.333333)
+    prs.slide_height = Inches(7.5)
+    _drop_all_slides(prs)
+    return prs, tpl
+
+
+def apply_theme_from_template(pptx_path: str, template_path: str) -> None:
+    """Copy only theme XML from the selected master into the generated deck."""
+    theme_xml = _read_theme_xml(template_path)
+    if theme_xml is None:
+        return
+
+    tmp_path = f"{pptx_path}.theme.tmp"
+    with zipfile.ZipFile(pptx_path, "r") as zin:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                data = zin.read(item.filename)
+                if item.filename == "ppt/theme/theme1.xml":
+                    data = theme_xml
+                zout.writestr(item, data)
+    os.replace(tmp_path, pptx_path)
+
+
+def _read_theme_xml(template_path: str) -> bytes | None:
+    with zipfile.ZipFile(template_path) as zf:
+        theme_names = sorted(
+            n for n in zf.namelist()
+            if n.startswith("ppt/theme/theme") and n.endswith(".xml")
+        )
+        if not theme_names:
+            return None
+        return zf.read(theme_names[0])
+
+
+def add_native_content_slide(prs: Presentation):
+    """Add a blank slide on the clean editable canvas."""
+    slide = prs.slides.add_slide(_blank_layout(prs))
+    _remove_empty_placeholders(slide)
+    return slide
+
+
+def add_native_cover_slide(
+    prs: Presentation,
+    template: TemplateType,
+    title: str,
+    subtitle: Optional[str],
+    presenter: str,
+    presentation_date: str,
+):
+    """Editable, picture-free cover inspired by the selected master."""
+    slide = add_native_content_slide(prs)
+    _add_brand_backdrop(slide, template)
+    if template == TemplateType.UAE_SOLAR:
+        _add_sunburst(slide, Inches(10.7), Inches(1.0), Inches(1.7))
+        title_top = Inches(2.2)
+    elif template == TemplateType.ACCENTURE:
+        _add_angle_band(slide, Inches(8.0), Inches(0), Inches(5.4), Inches(7.5))
+        title_top = Inches(1.7)
+    else:
+        _add_bubbles(slide)
+        title_top = Inches(1.8)
+
+    _add_runtime_textbox(
+        slide,
+        left=Inches(0.75), top=title_top,
+        width=Inches(8.8), height=Inches(1.6),
+        text=title,
+        font_size=Pt(42),
+        bold=True,
+    )
+    if subtitle:
+        _add_runtime_textbox(
+            slide,
+            left=Inches(0.8), top=Emu(title_top + Inches(1.7)),
+            width=Inches(8.6), height=Inches(0.8),
+            text=subtitle,
+            font_size=Pt(19),
+            line_spacing=1.15,
+        )
+    _add_runtime_textbox(
+        slide,
+        left=Inches(0.8), top=Inches(6.45),
+        width=Inches(5.6), height=Inches(0.55),
+        text=f"{presenter}  |  {presentation_date}",
+        font_size=Pt(12),
+    )
+    return slide
+
+
+def add_agenda_slide(prs: Presentation, template: TemplateType, items: list[str]):
+    """Fixed slide 2: editable agenda/index."""
+    slide = add_native_content_slide(prs)
+    _add_brand_header(slide, template, "Agenda")
+    agenda_items = items[:6] or ["Context", "Insights", "Recommendations"]
+    top = Inches(1.75)
+    for i, item in enumerate(agenda_items):
+        y = Emu(top + i * Inches(0.75))
+        badge = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(0.95), y, Inches(0.45), Inches(0.45))
+        _theme_fill(badge, _primary_accent(template))
+        _shape_text(badge, f"{i + 1}", 12, bold=True, align=PP_ALIGN.CENTER,
+                    font_theme=MSO_THEME_COLOR.BACKGROUND_1)
+        _add_runtime_textbox(
+            slide,
+            left=Inches(1.65), top=Emu(y - Inches(0.03)),
+            width=Inches(10.4), height=Inches(0.5),
+            text=item,
+            font_size=Pt(19),
+        )
+    return slide
+
+
+def add_summary_slide(prs: Presentation, template: TemplateType, items: list[str]):
+    """Fixed slide 14: editable summary/takeaways."""
+    slide = add_native_content_slide(prs)
+    _add_brand_header(slide, template, "Executive summary")
+    takeaways = items[:4] or ["Key findings are consolidated here."]
+    gap = Inches(0.25)
+    card_w = Emu((Inches(12.0) - gap) / 2)
+    card_h = Inches(1.55)
+    for i, text in enumerate(takeaways):
+        row = i // 2
+        col = i % 2
+        left = Emu(Inches(0.75) + col * (card_w + gap))
+        top = Emu(Inches(1.85) + row * Inches(1.95))
+        card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, card_w, card_h)
+        _theme_fill(card, _soft_accent(i))
+        card.line.fill.background()
+        _shape_text(card, text, 16, bold=True, align=PP_ALIGN.CENTER,
+                    font_theme=MSO_THEME_COLOR.TEXT_1)
+    return slide
+
+
+def add_native_end_slide(prs: Presentation, template: TemplateType):
+    """Editable, picture-free thank-you slide."""
+    slide = add_native_content_slide(prs)
+    _add_brand_backdrop(slide, template)
+    if template == TemplateType.AI_BUBBLE:
+        _add_bubbles(slide)
+    elif template == TemplateType.UAE_SOLAR:
+        _add_sunburst(slide, Inches(10.4), Inches(1.0), Inches(1.6))
+    else:
+        _add_angle_band(slide, Inches(8.7), Inches(0), Inches(4.8), Inches(7.5))
+    _add_runtime_textbox(
+        slide,
+        left=Inches(1.0), top=Inches(2.65),
+        width=Inches(7.8), height=Inches(1.2),
+        text="Thank you",
+        font_size=Pt(54),
+        bold=True,
+    )
+    _add_runtime_textbox(
+        slide,
+        left=Inches(1.05), top=Inches(3.95),
+        width=Inches(7.8), height=Inches(0.6),
+        text="Questions and discussion",
+        font_size=Pt(20),
+    )
+    return slide
+
+
+def _blank_layout(prs: Presentation):
+    for layout in prs.slide_layouts:
+        if "blank" in layout.name.lower():
+            return layout
+    return prs.slide_layouts[-1]
+
+
+def _primary_accent(template: TemplateType) -> MSO_THEME_COLOR:
+    if template == TemplateType.UAE_SOLAR:
+        return MSO_THEME_COLOR.ACCENT_2
+    return MSO_THEME_COLOR.ACCENT_1
+
+
+def _soft_accent(index: int) -> MSO_THEME_COLOR:
+    return [
+        MSO_THEME_COLOR.ACCENT_1,
+        MSO_THEME_COLOR.ACCENT_2,
+        MSO_THEME_COLOR.ACCENT_3,
+        MSO_THEME_COLOR.ACCENT_4,
+    ][index % 4]
+
+
+def _theme_fill(shape, color: MSO_THEME_COLOR, transparency: float = 0.0) -> None:
+    shape.fill.solid()
+    shape.fill.fore_color.theme_color = color
+    shape.fill.transparency = transparency
+
+
+def _shape_text(
+    shape,
+    text: str,
+    size: int,
+    *,
+    bold: bool = False,
+    align: PP_ALIGN = PP_ALIGN.LEFT,
+    font_theme: MSO_THEME_COLOR | None = None,
+) -> None:
+    tf = shape.text_frame
+    tf.clear()
+    tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    tf.margin_left = Inches(0.15)
+    tf.margin_right = Inches(0.15)
+    p = tf.paragraphs[0]
+    p.text = text
+    p.alignment = align
+    for run in p.runs:
+        run.font.size = Pt(size)
+        run.font.bold = bold
+        if font_theme is not None:
+            run.font.color.theme_color = font_theme
+
+
+def _add_brand_header(slide, template: TemplateType, title: str) -> None:
+    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(13.333), Inches(0.22))
+    _theme_fill(bar, _primary_accent(template))
+    bar.line.fill.background()
+    _add_runtime_textbox(
+        slide,
+        left=Inches(0.75), top=Inches(0.48),
+        width=Inches(11.8), height=Inches(0.75),
+        text=title,
+        font_size=Pt(34),
+        bold=True,
+    )
+
+
+def _add_brand_backdrop(slide, template: TemplateType) -> None:
+    bg = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(13.333), Inches(7.5))
+    _theme_fill(bg, MSO_THEME_COLOR.BACKGROUND_1)
+    bg.line.fill.background()
+    rail = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, Inches(0.22), Inches(7.5))
+    _theme_fill(rail, _primary_accent(template))
+    rail.line.fill.background()
+
+
+def _add_bubbles(slide) -> None:
+    specs = [
+        (9.0, 0.8, 2.6, 0.22),
+        (10.9, 2.7, 1.4, 0.30),
+        (8.6, 5.1, 2.0, 0.35),
+        (11.5, 5.5, 0.85, 0.15),
+    ]
+    for x, y, size, transparency in specs:
+        oval = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(size), Inches(size))
+        _theme_fill(oval, MSO_THEME_COLOR.ACCENT_1, transparency)
+        oval.line.fill.background()
+
+
+def _add_angle_band(slide, left, top, width, height) -> None:
+    band = slide.shapes.add_shape(MSO_SHAPE.PARALLELOGRAM, left, top, width, height)
+    _theme_fill(band, MSO_THEME_COLOR.ACCENT_1, 0.08)
+    band.line.fill.background()
+
+
+def _add_sunburst(slide, cx, cy, radius) -> None:
+    sun = slide.shapes.add_shape(MSO_SHAPE.OVAL, cx, cy, radius, radius)
+    _theme_fill(sun, MSO_THEME_COLOR.ACCENT_2, 0.05)
+    sun.line.fill.background()
+    center_x = Emu(cx + radius / 2)
+    center_y = Emu(cy + radius / 2)
+    for angle in range(0, 360, 30):
+        import math
+        length = Inches(1.15)
+        x2 = Emu(center_x + int(math.cos(math.radians(angle)) * length))
+        y2 = Emu(center_y + int(math.sin(math.radians(angle)) * length))
+        ray = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, center_x, center_y, x2, y2)
+        ray.line.color.theme_color = MSO_THEME_COLOR.ACCENT_2
+        ray.line.width = Pt(1)
 
 
 def add_cover_slide(

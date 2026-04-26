@@ -46,7 +46,7 @@ def manifest_path_for(pptx_path: str) -> str:
 
 
 def _body_slices(content: PresentationContent) -> list[SlideContent]:
-    """Return the 13 body slides (positions 2..14)."""
+    """Return the 11 body slides for positions 3..13."""
     ordered = sorted(content.slides, key=lambda s: s.slide_number)
     if len(ordered) < 3:
         # Degenerate case: pad via repetition so scheduler still gets 13 slots.
@@ -63,7 +63,7 @@ def _body_slices(content: PresentationContent) -> list[SlideContent]:
             continue
         trimmed.append(slide)
 
-    target = TOTAL_SLIDES - 2
+    target = TOTAL_SLIDES - 4
     if len(trimmed) >= target:
         return trimmed[:target]
 
@@ -85,14 +85,14 @@ def build_deck(
     cover_subtitle: Optional[str] = None,
 ) -> str:
     """Produce the final 15-slide .pptx at ``output_path``."""
-    prs, tpl = template_ops.load_blank_canvas(template_path)
+    prs, tpl = template_ops.load_editable_canvas(template_path)
     layouts.set_primary_accent(
         _PRIMARY_ACCENT_BY_TEMPLATE.get(tpl, MSO_THEME_COLOR.ACCENT_1)
     )
 
     # Slide 1 — cover
     subtitle = cover_subtitle or _derive_cover_subtitle(content)
-    template_ops.add_cover_slide(
+    template_ops.add_native_cover_slide(
         prs,
         template=tpl,
         title=content.title,
@@ -101,25 +101,33 @@ def build_deck(
         presentation_date=presentation_date,
     )
 
-    # Slides 2..14 — scheduled body layouts
+    agenda_items = _agenda_items(content)
+    template_ops.add_agenda_slide(prs, tpl, agenda_items)
+
+    # Slides 3..13 — scheduled body layouts
     body = _body_slices(content)
     assignments = schedule(body)
-    layout_trace: list[dict] = [{"slide": 1, "layout": "cover", "class": "cover"}]
+    layout_trace: list[dict] = [
+        {"slide": 1, "layout": "cover", "class": "cover"},
+        {"slide": 2, "layout": "agenda", "class": "agenda"},
+    ]
     for i, (slide_content, entry) in enumerate(zip(body, assignments)):
-        # Alternate between the two "content" layouts for extra title-bar
-        # variety when the master offers more than one.
-        slide = template_ops.add_content_slide(prs, tpl, pick=i % 2)
+        slide = template_ops.add_native_content_slide(prs)
         entry.render(slide, slide_content)
         layout_trace.append(
-            {"slide": i + 2, "layout": entry.name, "class": entry.klass}
+            {"slide": i + 3, "layout": entry.name, "class": entry.klass}
         )
 
+    template_ops.add_summary_slide(prs, tpl, _summary_items(content))
+    layout_trace.append({"slide": 14, "layout": "summary", "class": "summary"})
+
     # Slide 15 — end
-    template_ops.add_end_slide(prs, tpl)
+    template_ops.add_native_end_slide(prs, tpl)
     layout_trace.append({"slide": TOTAL_SLIDES, "layout": "end", "class": "end"})
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     prs.save(output_path)
+    template_ops.apply_theme_from_template(output_path, template_path)
 
     with open(manifest_path_for(output_path), "w") as f:
         json.dump({"layouts": layout_trace, "template": tpl.value}, f, indent=2)
@@ -135,3 +143,35 @@ def _derive_cover_subtitle(content: PresentationContent) -> str:
         if slide.key_message:
             return slide.key_message
     return ""
+
+
+def _agenda_items(content: PresentationContent) -> list[str]:
+    items: list[str] = []
+    for slide in sorted(content.slides, key=lambda s: s.slide_number):
+        if slide.slide_number in (1, TOTAL_SLIDES):
+            continue
+        if slide.slide_type in (SlideType.TITLE, SlideType.THANK_YOU):
+            continue
+        title = slide.title.strip()
+        if title and title not in items:
+            items.append(title)
+    return items[:6]
+
+
+def _summary_items(content: PresentationContent) -> list[str]:
+    items: list[str] = []
+    for slide in sorted(content.slides, key=lambda s: s.slide_number):
+        msg = slide.key_message.strip()
+        if msg and msg not in items:
+            items.append(msg)
+    if len(items) < 4:
+        for slide in sorted(content.slides, key=lambda s: s.slide_number):
+            for bullet in slide.bullets:
+                text = bullet.text.strip()
+                if text and text not in items:
+                    items.append(text)
+                if len(items) >= 4:
+                    break
+            if len(items) >= 4:
+                break
+    return items[:4]

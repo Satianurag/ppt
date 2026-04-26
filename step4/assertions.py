@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import zipfile
 from dataclasses import dataclass
 
 from pptx import Presentation
@@ -151,8 +152,6 @@ def check_c2_no_adjacent_repeat(pptx_path: str) -> AssertionResult:
 def check_c3_master_inheritance(pptx_path: str) -> AssertionResult:
     """C3: No hardcoded srgbClr or a:latin font overrides inside slide XML."""
     issues: list[str] = []
-    import zipfile
-
     with zipfile.ZipFile(pptx_path) as zf:
         slide_names = [n for n in zf.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml")]
         for name in slide_names:
@@ -169,6 +168,45 @@ def check_c3_master_inheritance(pptx_path: str) -> AssertionResult:
             if latin:
                 issues.append(f"C3: {name} has {latin} font-name overrides")
     return AssertionResult("C3", not issues, issues)
+
+
+def check_c5_no_pictures_or_media(pptx_path: str) -> AssertionResult:
+    """C5: Output must contain no picture shapes, blips, or embedded media."""
+    issues: list[str] = []
+    with zipfile.ZipFile(pptx_path) as zf:
+        names = zf.namelist()
+        media = [n for n in names if n.startswith("ppt/media/")]
+        if media:
+            issues.append(f"C5: package contains {len(media)} ppt/media files")
+
+        xml_names = [
+            n for n in names
+            if n.startswith("ppt/") and n.endswith((".xml", ".rels"))
+        ]
+        for name in xml_names:
+            xml = zf.read(name).decode("utf-8", errors="ignore")
+            pic_count = xml.count("<p:pic")
+            blip_count = xml.count("<a:blip")
+            image_rel_count = xml.count("/image")
+            if pic_count:
+                issues.append(f"C5: {name} contains {pic_count} picture nodes")
+            if blip_count:
+                issues.append(f"C5: {name} contains {blip_count} image blips")
+            if image_rel_count:
+                issues.append(f"C5: {name} contains {image_rel_count} image relationships")
+    return AssertionResult("C5", not issues, issues)
+
+
+def check_c6_widescreen_16x9(pptx_path: str) -> AssertionResult:
+    """C6: Output deck must be standard 16:9 widescreen."""
+    prs = Presentation(pptx_path)
+    width = int(prs.slide_width)
+    height = int(prs.slide_height)
+    ratio = width / height if height else 0
+    issues: list[str] = []
+    if abs(ratio - (16 / 9)) > 0.01:
+        issues.append(f"C6: slide ratio {ratio:.3f} is not 16:9")
+    return AssertionResult("C6", not issues, issues)
 
 
 def _slide_fill_ratio(slide) -> float:
@@ -211,4 +249,6 @@ def run_all(pptx_path: str) -> dict[str, AssertionResult]:
         "C2": check_c2_no_adjacent_repeat(pptx_path),
         "C3": check_c3_master_inheritance(pptx_path),
         "C4": check_c4_fill_ratio(pptx_path),
+        "C5": check_c5_no_pictures_or_media(pptx_path),
+        "C6": check_c6_widescreen_16x9(pptx_path),
     }

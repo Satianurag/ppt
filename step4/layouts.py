@@ -457,7 +457,7 @@ def _add_chart(slide, left, top, width, height, data) -> None:
         plot = chart.plots[0]
         plot.has_data_labels = True
 
-    num_fmt = getattr(data, "number_format", "General")
+    num_fmt = data.number_format
     if num_fmt and num_fmt != "General":
         all_vals = []
         for s in data.series:
